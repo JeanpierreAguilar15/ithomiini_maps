@@ -87,19 +87,72 @@ standardize_columns <- function(df) {
 # Función para cargar datos desde Excel (DORE)
 load_dore_data <- function() {
   tryCatch({
-    if (file.exists("Dore_Ithomiini_data.xlsx")) {
+    if (file.exists("Dore_Ithomiini_Data.xlsx")) {
       message("Cargando datos DORE desde Excel...")
       
-      df <- read_excel("Dore_Ithomiini_data.xlsx")
-      n_original <- nrow(df)
-      
-      df <- clean_names(df)
-      df <- standardize_columns(df)
-      df <- clean_coordinates(df)
-      
-      message(paste("  - Total registros DORE:", n_original))
-      message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
-      return(df)
+      # Obtener información de las hojas del archivo Excel
+      tryCatch({
+        if(!requireNamespace("readxl", quietly = TRUE)) {
+          warning("El paquete readxl no está disponible. No se pueden leer archivos Excel.")
+          return(NULL)
+        }
+        
+        # Listar hojas de Excel
+        sheets <- readxl::excel_sheets("Dore_Ithomiini_Data.xlsx")
+        message(paste("  - Hojas disponibles:", paste(sheets, collapse = ", ")))
+        
+        # Intentar leer la primera hoja
+        df <- readxl::read_excel("Dore_Ithomiini_Data.xlsx", sheet = 1, na = c("", "NA", "N/A"), guess_max = 50000)
+        message(paste("  - Leyendo hoja:", sheets[1]))
+        
+        # Si tiene muy pocas columnas, intentar con otras hojas
+        if(ncol(df) < 5 && length(sheets) > 1) {
+          for(i in 2:length(sheets)) {
+            temp_df <- readxl::read_excel("Dore_Ithomiini_Data.xlsx", sheet = i, na = c("", "NA", "N/A"), guess_max = 50000)
+            message(paste("  - Intentando hoja alternativa:", sheets[i], "con", ncol(temp_df), "columnas"))
+            
+            if(ncol(temp_df) > ncol(df)) {
+              df <- temp_df
+              message(paste("  - Usando hoja:", sheets[i]))
+            }
+          }
+        }
+        
+        n_original <- nrow(df)
+        
+        df <- clean_names(df)
+        df <- standardize_columns(df)
+        df <- clean_coordinates(df)
+        
+        message(paste("  - Total registros DORE:", n_original))
+        message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
+        
+        # Si el dataframe tiene pocas filas, es probable que haya un error de lectura
+        if(nrow(df) < 1000) {
+          warning(paste("Pocos registros en Excel (", nrow(df), "). Puede indicar un problema de lectura."))
+        }
+        
+        return(df)
+      }, error = function(e) {
+        warning(paste("Error leyendo Excel:", e$message))
+        
+        # Intentar con una configuración más simple como último recurso
+        message("  - Intentando método alternativo de lectura de Excel...")
+        df <- read_excel("Dore_Ithomiini_Data.xlsx", guess_max = 21000)
+        
+        if(!is.null(df) && nrow(df) > 0) {
+          n_original <- nrow(df)
+          
+          df <- clean_names(df)
+          df <- standardize_columns(df)
+          df <- clean_coordinates(df)
+          
+          message(paste("  - Total registros DORE (método alternativo):", n_original))
+          return(df)
+        } else {
+          return(NULL)
+        }
+      })
     } else {
       warning("Archivo DORE Excel no encontrado")
       return(NULL)
@@ -113,7 +166,7 @@ load_dore_data <- function() {
 # Función para cargar y procesar datos de Joana
 load_joana_data <- function() {
   tryCatch({
-    if (file.exists("Dore_Ithomiini_dataJ.csv")) {
+    if (file.exists("Dore_Ithomiini_DataJ.csv")) {
       message("Cargando datos de Joana desde CSV local...")
       
       # Intentar con diferentes separadores
@@ -121,27 +174,94 @@ load_joana_data <- function() {
       
       # Intentar con punto y coma
       tryCatch({
-        df <- read.csv2("Dore_Ithomiini_dataJ.csv", stringsAsFactors = FALSE)
+        # Primero intentar con readr::read_csv2 para mejor manejo de errores
+        df <- readr::read_csv2("Dore_Ithomiini_DataJ.csv", 
+                               col_types = readr::cols(), 
+                               locale = readr::locale(encoding = "UTF-8"),
+                               show_col_types = FALSE,
+                               na = c("", "NA", "N/A"))
+        
         if(ncol(df) > 1) {
-          message("  - Archivo leído con separador ';'")
+          message("  - Archivo leído con separador ';' usando readr")
         } else {
-          df <- NULL
+          # Si falla, intentar con utils::read.csv2
+          df <- utils::read.csv2("Dore_Ithomiini_DataJ.csv", 
+                                 stringsAsFactors = FALSE, 
+                                 encoding = "UTF-8", 
+                                 na.strings = c("", "NA", "N/A"))
+          message("  - Archivo leído con separador ';' usando utils")
         }
-      }, error = function(e) { df <- NULL })
+      }, error = function(e) { 
+        message(paste("  - Error al leer con ';':", e$message))
+        df <- NULL 
+      })
       
       # Si falla, intentar con coma
-      if(is.null(df)) {
+      if(is.null(df) || ncol(df) <= 1) {
         tryCatch({
-          df <- read.csv("Dore_Ithomiini_dataJ.csv", stringsAsFactors = FALSE)
+          # Primero intentar con readr
+          df <- readr::read_csv("Dore_Ithomiini_DataJ.csv", 
+                                col_types = readr::cols(), 
+                                locale = readr::locale(encoding = "UTF-8"),
+                                show_col_types = FALSE,
+                                na = c("", "NA", "N/A"))
+          
           if(ncol(df) > 1) {
-            message("  - Archivo leído con separador ','")
+            message("  - Archivo leído con separador ',' usando readr")
           } else {
-            df <- NULL
+            # Si falla, intentar con utils::read.csv
+            df <- utils::read.csv("Dore_Ithomiini_DataJ.csv", 
+                                  stringsAsFactors = FALSE, 
+                                  encoding = "UTF-8", 
+                                  na.strings = c("", "NA", "N/A"))
+            message("  - Archivo leído con separador ',' usando utils")
           }
-        }, error = function(e) { df <- NULL })
+        }, error = function(e) { 
+          message(paste("  - Error al leer con ',':", e$message))
+          df <- NULL 
+        })
       }
       
-      if(!is.null(df)) {
+      # Si sigue fallando, intentar con readLines y procesamiento manual
+      if(is.null(df) || ncol(df) <= 1) {
+        message("  - Intentando lectura manual línea por línea")
+        tryCatch({
+          # Leer las líneas del archivo
+          lines <- readLines("Dore_Ithomiini_DataJ.csv", encoding = "UTF-8")
+          
+          # Detectar el separador examinando la primera línea
+          first_line <- lines[1]
+          sep_char <- ","
+          if(grepl(";", first_line)) sep_char <- ";"
+          if(grepl("\t", first_line)) sep_char <- "\t"
+          
+          # Dividir las líneas manualmente
+          data_list <- lapply(lines, function(line) {
+            unlist(strsplit(line, sep_char, fixed = TRUE))
+          })
+          
+          # Verificar que todas las filas tengan el mismo número de columnas
+          col_count <- length(data_list[[1]])
+          valid_rows <- sapply(data_list, function(x) length(x) == col_count)
+          
+          if(sum(valid_rows) > 1) {
+            # Crear data frame
+            header <- data_list[[1]]
+            data_matrix <- do.call(rbind, data_list[valid_rows][-1])
+            df <- as.data.frame(data_matrix, stringsAsFactors = FALSE)
+            names(df) <- header
+            
+            message(paste("  - Procesamiento manual exitoso con", sep_char, 
+                          "como separador. Filas válidas:", nrow(df)))
+          } else {
+            message("  - El procesamiento manual falló: formato inconsistente")
+          }
+        }, error = function(e) {
+          message(paste("  - Error en procesamiento manual:", e$message))
+        })
+      }
+      
+      if(!is.null(df) && ncol(df) > 1) {
         n_original <- nrow(df)
         
         df <- clean_names(df)
@@ -152,11 +272,11 @@ load_joana_data <- function() {
         message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
         return(df)
       } else {
-        warning("No se pudo leer el archivo Dore_Ithomiini_dataJ.csv")
+        warning("No se pudo leer el archivo Dore_Ithomiini_DataJ.csv")
         return(NULL)
       }
     } else {
-      warning("Archivo Dore_Ithomiini_dataJ.csv no encontrado")
+      warning("Archivo Dore_Ithomiini_DataJ.csv no encontrado")
       return(NULL)
     }
   }, error = function(e) {
@@ -264,11 +384,16 @@ if (length(all_data) > 0) {
     return(df)
   }
   
-  # Asegurar columnas en todos los dataframes
-  all_data <- lapply(all_data, ensure_columns)
+  # Asegurar columnas en todos los dataframes y mostrar conteos
+  message("\nConteo de registros por fuente antes de combinar:")
+  for (name in names(all_data)) {
+    all_data[[name]] <- ensure_columns(all_data[[name]])
+    message(paste(" -", name, ":", nrow(all_data[[name]]), "registros"))
+  }
   
   # Combinar todos los dataframes
   datos_mariposas <- bind_rows(all_data, .id = "source_file")
+  message(paste("\nTotal de registros después de combinar:", nrow(datos_mariposas)))
   
   # Limpiar y procesar los datos combinados
   datos_mariposas <- datos_mariposas %>%
@@ -323,7 +448,7 @@ if (length(all_data) > 0) {
         TRUE ~ "Montano alto"
       ),
       
-      # Indicador de coordenadas válidas
+      # Indicador de coordenadas válidas - TODOS los registros se consideran en el mapa
       has_coords = !is.na(latitude) & !is.na(longitude)
     )
   
@@ -336,6 +461,7 @@ if (length(all_data) > 0) {
   message(paste("Total de registros:", format(nrow(datos_mariposas), big.mark = ",")))
   message(paste("Registros con coordenadas válidas:", format(sum(datos_mariposas$has_coords), big.mark = ",")))
   message(paste("Registros sin coordenadas:", format(sum(!datos_mariposas$has_coords), big.mark = ",")))
+  message(paste("Porcentaje con coordenadas:", round(sum(datos_mariposas$has_coords) / nrow(datos_mariposas) * 100, 1), "%"))
   message(paste("Géneros únicos:", n_distinct(datos_mariposas$genus)))
   message(paste("Especies únicas:", n_distinct(datos_mariposas$scientific_name)))
   
@@ -352,7 +478,10 @@ if (length(all_data) > 0) {
   
   # Mostrar fuentes de datos
   message("\nDistribución por fuente de datos:")
-  print(table(datos_mariposas$source_file))
+  source_table <- table(datos_mariposas$source_file)
+  for (source_name in names(source_table)) {
+    message(paste(" -", source_name, ":", format(source_table[source_name], big.mark = ","), "registros"))
+  }
   
 } else {
   # Crear dataframe vacío si no hay datos
