@@ -1,0 +1,58 @@
+# Archivos específicos de R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+.Renviron
+
+# Archivos temporales
+*.tmp
+*~
+~$*.doc*
+~$*.xls*
+*.xlk
+*.bak
+*.swp
+
+# Archivos de datos grandes
+*.rds
+*.RDS
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.tar.gz
+
+# Archivo Excel específico mencionado en el error
+Dore_Ithomiini_records_with_ssp.xlsx
+
+# Directorios que pueden contener datos grandes
+/data/
+/datos/
+/cache/
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Archivos de logs
+*.log
+
+# Archivos de salida de knitr y R Markdown
+*_cache/
+*_files/
+*.html
+*.pdf
+*.docx
+
+# Archivos específicos de VS Code/RStudio
+.vscode/
+.idea/
+*.code-workspace
+
+# Carpetas específicas que no deberían ser versionadas
+/tmp/
+/temp/ 
