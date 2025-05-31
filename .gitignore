@@ -24,9 +24,6 @@
 *.zip
 *.tar.gz
 
-# Archivo Excel específico mencionado en el error
-Dore_Ithomiini_records_with_ssp.xlsx
-
 # Directorios que pueden contener datos grandes
 /data/
 /datos/

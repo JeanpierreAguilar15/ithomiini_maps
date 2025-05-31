@@ -33,7 +33,14 @@ Una aplicación interactiva desarrollada en R Shiny para visualizar y explorar d
 
 - `app.R`: Código principal de la aplicación Shiny
 - `data_loader.R`: Script para cargar y procesar los datos de mariposas
-- `datos_Joana.R`: Script para procesar datos adicionales
+- `install_packages.R`: Script para instalar todas las dependencias necesarias
+- `rename_files.R`: Utilidad para renombrar archivos de datos
+
+## Archivos de datos requeridos
+
+La aplicación necesita los siguientes archivos de datos:
+- `Dore_Ithomiini_data.xlsx`: Conjunto de datos principal de mariposas Ithomiini
+- `Dore_Ithomiini_dataJ.csv`: Datos adicionales (anteriormente "Joana_Datos.csv")
 
 ## Fuentes de datos
 

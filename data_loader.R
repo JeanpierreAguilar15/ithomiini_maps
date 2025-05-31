@@ -87,10 +87,10 @@ standardize_columns <- function(df) {
 # Función para cargar datos desde Excel (DORE)
 load_dore_data <- function() {
   tryCatch({
-    if (file.exists("Dore_Ithomiini_records_with_ssp.xlsx")) {
+    if (file.exists("Dore_Ithomiini_data.xlsx")) {
       message("Cargando datos DORE desde Excel...")
       
-      df <- read_excel("Dore_Ithomiini_records_with_ssp.xlsx")
+      df <- read_excel("Dore_Ithomiini_data.xlsx")
       n_original <- nrow(df)
       
       df <- clean_names(df)
@@ -113,7 +113,7 @@ load_dore_data <- function() {
 # Función para cargar y procesar datos de Joana
 load_joana_data <- function() {
   tryCatch({
-    if (file.exists("Joana_Datos.csv")) {
+    if (file.exists("Dore_Ithomiini_dataJ.csv")) {
       message("Cargando datos de Joana desde CSV local...")
       
       # Intentar con diferentes separadores
@@ -121,7 +121,7 @@ load_joana_data <- function() {
       
       # Intentar con punto y coma
       tryCatch({
-        df <- read.csv2("Joana_Datos.csv", stringsAsFactors = FALSE)
+        df <- read.csv2("Dore_Ithomiini_dataJ.csv", stringsAsFactors = FALSE)
         if(ncol(df) > 1) {
           message("  - Archivo leído con separador ';'")
         } else {
@@ -132,7 +132,7 @@ load_joana_data <- function() {
       # Si falla, intentar con coma
       if(is.null(df)) {
         tryCatch({
-          df <- read.csv("Joana_Datos.csv", stringsAsFactors = FALSE)
+          df <- read.csv("Dore_Ithomiini_dataJ.csv", stringsAsFactors = FALSE)
           if(ncol(df) > 1) {
             message("  - Archivo leído con separador ','")
           } else {
@@ -152,11 +152,11 @@ load_joana_data <- function() {
         message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
         return(df)
       } else {
-        warning("No se pudo leer el archivo Joana_Datos.csv")
+        warning("No se pudo leer el archivo Dore_Ithomiini_dataJ.csv")
         return(NULL)
       }
     } else {
-      warning("Archivo Joana_Datos.csv no encontrado")
+      warning("Archivo Dore_Ithomiini_dataJ.csv no encontrado")
       return(NULL)
     }
   }, error = function(e) {
@@ -231,7 +231,7 @@ if (!is.null(joana_data) && nrow(joana_data) > 0) {
 
 # 3. Cargar otros archivos CSV en el directorio
 csv_files <- list.files(pattern = "\\.csv$", full.names = TRUE)
-csv_files <- csv_files[!grepl("Joana_Datos\\.csv", csv_files)]
+csv_files <- csv_files[!grepl("Dore_Ithomiini_dataJ\\.csv", csv_files)]
 
 if (length(csv_files) > 0) {
   message(paste("\nBuscando otros archivos CSV:", length(csv_files), "encontrados"))
