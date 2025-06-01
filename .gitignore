@@ -18,14 +18,15 @@
 # Archivos de datos grandes
 *.rds
 *.RDS
-*.xlsx
-*.xls
-*.csv
+# Ya no ignoramos archivos Excel y CSV
+# *.xlsx
+# *.xls
+# *.csv
 *.zip
 *.tar.gz
-# Excepciones - archivos específicos para incluir
-!Dore_Ithomiini_Data.xlsx
-!Dore_Ithomiini_DataJ.csv
+# Ya no necesitamos excepciones específicas
+# !Dore_Ithomiini_Data.xlsx
+# !Dore_Ithomiini_DataJ.csv
 
 # Directorios que pueden contener datos grandes
 /data/
