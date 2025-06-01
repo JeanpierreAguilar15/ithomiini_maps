@@ -23,6 +23,9 @@
 *.csv
 *.zip
 *.tar.gz
+# Excepciones - archivos específicos para incluir
+!Dore_Ithomiini_Data.xlsx
+!Dore_Ithomiini_DataJ.csv
 
 # Directorios que pueden contener datos grandes
 /data/
