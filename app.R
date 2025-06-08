@@ -13,12 +13,26 @@ library(geosphere)
 # Cargar datos
 source("data_loader.R")
 
-# Verificar si existe el campo year, si no, intentar crearlo
+# Usar años de collection_year que ya están calculados en data_loader.R
 if(!"year" %in% names(datos_mariposas)) {
-  # Crear año simulado directamente para todos los registros
-  set.seed(123) # Para reproducibilidad
-  datos_mariposas$year <- sample(1950:2020, nrow(datos_mariposas), replace = TRUE)
-  message("Creando años simulados para demostración (1950-2020)")
+  if("collection_year" %in% names(datos_mariposas)) {
+    # Usar la columna ya calculada
+    datos_mariposas$year <- datos_mariposas$collection_year
+    
+    # Mensaje informativo
+    valid_years <- sum(!is.na(datos_mariposas$year))
+    
+    if(valid_years > 0) {
+      years_range <- range(datos_mariposas$year, na.rm = TRUE)
+      message(paste("Usando datos de collection_year:", valid_years, "registros con fechas válidas"))
+      message(paste("Rango de años:", years_range[1], "-", years_range[2]))
+    } else {
+      message("No hay datos válidos de fechas de colección")
+    }
+  } else {
+    message("No se encontraron datos de fechas. Filtro de fechas deshabilitado.")
+    datos_mariposas$year <- NA
+  }
 }
 
 # Tema personalizado
@@ -34,6 +48,190 @@ mi_tema <- bs_theme(
   heading_font = font_google("Roboto Slab"),
   font_scale = 0.9
 )
+
+# ===================================================================
+# FUNCIONES HELPER PARA OPTIMIZACIÓN Y MANTENIBILIDAD
+# ===================================================================
+
+# Función para crear filtros dinámicos reutilizable
+create_dynamic_filter <- function(data, column, filter_name, label, selected_genus = NULL, selected_species = NULL) {
+  # Aplicar filtros previos si existen
+  filtered_data <- data
+  
+  if (!is.null(selected_genus) && selected_genus != "Todos") {
+    filtered_data <- filtered_data %>% filter(genus == selected_genus)
+  }
+  
+  if (!is.null(selected_species) && selected_species != "Todas") {
+    filtered_data <- filtered_data %>% filter(species == selected_species)
+  }
+  
+  # Obtener opciones únicas
+  choices_list <- filtered_data %>%
+    pull(!!sym(column)) %>%
+    unique() %>%
+    sort() %>%
+    na.omit()
+  
+  # Remover valores no deseados
+  choices_list <- choices_list[!choices_list %in% c("No registrada", "")]
+  
+  # Agregar opción "Todas/Todos" - CORREGIDO
+  all_option <- if(label %in% c("Especie", "Subespecie")) "Todas" else "Todos"
+  choices_list <- c(all_option, choices_list)
+  
+  pickerInput(
+    filter_name,
+    paste0(label, ":"),
+    choices = choices_list,
+    selected = all_option,
+    options = list(
+      liveSearch = TRUE,
+      size = 10,
+      maxOptions = 1000
+    )
+  )
+}
+
+# Función para aplicar filtros de manera consistente
+apply_filters <- function(data, filters) {
+  df <- data
+  
+  # DEBUG: Ver todos los filtros recibidos
+  cat("DEBUG APPLY_FILTERS - Datos iniciales:", nrow(df), "registros\n")
+  cat("DEBUG Género filtro:", filters$genus, "\n")
+  cat("DEBUG Especie filtro:", filters$species, "\n")
+  cat("DEBUG País filtro:", paste(filters$countries, collapse = ", "), "\n")
+  cat("DEBUG Columnas disponibles:", paste(names(df)[1:10], collapse = ", "), "...\n")
+  
+  # Filtros taxonómicos - CORREGIDOS
+  if (!is.null(filters$genus) && length(filters$genus) > 0 && filters$genus != "Todos") {
+    df_before <- nrow(df)
+    df <- df %>% filter(genus == filters$genus)
+    cat("DEBUG Filtro género aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  if (!is.null(filters$species) && length(filters$species) > 0 && !filters$species %in% c("Todas", "Todos")) {
+    df_before <- nrow(df)
+    df <- df %>% filter(species == filters$species)
+    cat("DEBUG Filtro especie aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  if (!is.null(filters$subspecies) && length(filters$subspecies) > 0 && !filters$subspecies %in% c("Todas", "Todos")) {
+    df_before <- nrow(df)
+    df <- df %>% filter(sub_species == filters$subspecies)
+    cat("DEBUG Filtro subespecie aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  if (!is.null(filters$subfamily) && length(filters$subfamily) > 0 && !filters$subfamily %in% c("Todas", "Todos")) {
+    df_before <- nrow(df)
+    df <- df %>% filter(subfamily == filters$subfamily)
+    cat("DEBUG Filtro subfamilia aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  if (!is.null(filters$tribe) && length(filters$tribe) > 0 && filters$tribe != "Todas") {
+    df_before <- nrow(df)
+    df <- df %>% filter(tribe == filters$tribe)
+    cat("DEBUG Filtro tribu aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  # Filtro geográfico - MEJORADO
+  if (!is.null(filters$countries) && length(filters$countries) > 0 && !"Todos" %in% filters$countries) {
+    df_before <- nrow(df)
+    df <- df %>% filter(country %in% filters$countries)
+    cat("DEBUG Filtro países aplicado:", df_before, "->", nrow(df), "registros\n")
+  }
+  
+  # Filtro temporal (solo si está activado)
+  if (!is.null(filters$enable_date) && filters$enable_date == TRUE) {
+    if ("year" %in% names(df) && !is.null(filters$year_range) && length(filters$year_range) == 2) {
+      if (!is.na(filters$year_range[1]) && !is.na(filters$year_range[2])) {
+        tryCatch({
+          df <- df %>% filter(year >= filters$year_range[1] & year <= filters$year_range[2])
+        }, error = function(e) {
+          message("Error al filtrar por año: ", e$message)
+        })
+      }
+    }
+  }
+  
+  cat("DEBUG APPLY_FILTERS - Resultado final:", nrow(df), "registros\n")
+  return(df)
+}
+
+# Función para validar coordenadas
+validate_coordinates <- function(data) {
+  data %>%
+    filter(
+      has_coords == TRUE,
+      !is.na(longitude), !is.na(latitude),
+      longitude != 0, latitude != 0,
+      longitude >= -180, longitude <= 180,
+      latitude >= -90, latitude <= 90
+    )
+}
+
+# Función para generar estadísticas de filtros
+generate_filter_stats <- function(data_original, data_filtered, data_with_coords) {
+  list(
+    total_original = nrow(data_original),
+    total_filtered = nrow(data_filtered),
+    total_with_coords = nrow(data_with_coords),
+    unique_species = n_distinct(data_filtered$scientific_name),
+    coord_percentage = round((nrow(data_with_coords) / nrow(data_filtered)) * 100, 1)
+  )
+}
+
+# Función para crear texto de filtros activos
+create_active_filters_text <- function(filters) {
+  active_filters <- c()
+  
+  if (!is.null(filters$genus) && filters$genus != "Todos") {
+    active_filters <- c(active_filters, paste("Género:", filters$genus))
+  }
+  
+  if (!is.null(filters$species) && !filters$species %in% c("Todas", "Todos")) {
+    active_filters <- c(active_filters, paste("Especie:", filters$species))
+  }
+  
+  if (!is.null(filters$subspecies) && !filters$subspecies %in% c("Todas", "Todos")) {
+    active_filters <- c(active_filters, paste("Subespecie:", filters$subspecies))
+  }
+  
+  if (!is.null(filters$subfamily) && !filters$subfamily %in% c("Todas", "Todos")) {
+    active_filters <- c(active_filters, paste("Subfamilia:", filters$subfamily))
+  }
+  
+  if (!is.null(filters$tribe) && filters$tribe != "Todas") {
+    active_filters <- c(active_filters, paste("Tribu:", filters$tribe))
+  }
+  
+  if (!is.null(filters$countries) && length(filters$countries) > 0 && !"Todos" %in% filters$countries) {
+    if (length(filters$countries) <= 3) {
+      active_filters <- c(active_filters, paste("Países:", paste(filters$countries, collapse = ", ")))
+    } else {
+      active_filters <- c(active_filters, paste("Países:", length(filters$countries), "seleccionados"))
+    }
+  }
+  
+  if (!is.null(filters$enable_date) && filters$enable_date == TRUE && 
+      !is.null(filters$year_range) && length(filters$year_range) == 2) {
+    active_filters <- c(active_filters, paste("Años:", filters$year_range[1], "-", filters$year_range[2]))
+  }
+  
+  if (length(active_filters) == 0) {
+    return("Mostrando todos los datos disponibles")
+  } else {
+    return(paste("Filtros activos:", paste(active_filters, collapse = " | ")))
+  }
+}
+
+# SIN OPTIMIZACIÓN - SIEMPRE TODOS LOS DATOS
+# (Eliminada función get_map_data que causaba problemas)
+
+# ===================================================================
+# FIN DE FUNCIONES HELPER
+# ===================================================================
 
 # UI
 ui <- page_navbar(
@@ -74,6 +272,34 @@ ui <- page_navbar(
       .navbar {
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
       }
+      
+      /* Estilos modernos para clusters elegantes */
+      .elegant-cluster-icon {
+        text-align: center !important;
+        border-radius: 50% !important;
+        transition: all 0.3s ease !important;
+      }
+      
+      .elegant-cluster-icon:hover {
+        transform: scale(1.1) !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+      }
+      
+      .leaflet-marker-icon {
+        border: none !important;
+        background: none !important;
+      }
+      
+      /* Animación sutil para clusters */
+      @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+      }
+      
+      .elegant-cluster-icon.large {
+        animation: pulse 2s infinite ease-in-out;
+      }
     '))
   ),
   
@@ -107,6 +333,29 @@ ui <- page_navbar(
           
           uiOutput("ui_filtro_subespecie"),
           
+          # Nuevos filtros: Subfamily y Tribe
+          pickerInput(
+            "filtro_subfamily",
+            "Subfamilia:",
+            choices = c("Todas", sort(unique(datos_mariposas$subfamily[datos_mariposas$subfamily != "No especificada"]))),
+            selected = "Todas",
+            options = list(
+              liveSearch = TRUE,
+              size = 8
+            )
+          ),
+          
+          pickerInput(
+            "filtro_tribe",
+            "Tribu:",
+            choices = c("Todas", sort(unique(datos_mariposas$tribe[datos_mariposas$tribe != "No especificada"]))),
+            selected = "Todas",
+            options = list(
+              liveSearch = TRUE,
+              size = 8
+            )
+          ),
+          
           pickerInput(
             "filtro_pais",
             "País:",
@@ -119,21 +368,54 @@ ui <- page_navbar(
             )
           ),
           
-          # Filtro de años simplificado - solo rango
+          # Control para activar/desactivar filtro de fechas
           div(
-            class = "form-group mb-4",
-            tags$label("Rango de años:", class = "mb-2 fw-bold"),
-            sliderInput(
-              "rango_anios",
-              label = NULL,
-              min = 1900,
-              max = as.integer(format(Sys.Date(), "%Y")),
-              value = c(1900, as.integer(format(Sys.Date(), "%Y"))),
-              step = 1,
-              sep = "",
-              width = "100%",
-              ticks = TRUE,
-              animate = TRUE
+            class = "form-group mb-3",
+            materialSwitch(
+              inputId = "enable_date_filter",
+              label = "Activar filtro de fechas",
+              value = FALSE,
+              status = "primary"
+            )
+          ),
+          
+          # Filtro de años - solo visible si está activado
+          conditionalPanel(
+            condition = "input.enable_date_filter == true",
+            div(
+              class = "form-group mb-4",
+              tags$label("Rango de años:", class = "mb-2 fw-bold"),
+              sliderInput(
+                "rango_anios",
+                label = NULL,
+                min = ifelse(any(!is.na(datos_mariposas$year)), 
+                            min(datos_mariposas$year, na.rm = TRUE), 1900),
+                max = ifelse(any(!is.na(datos_mariposas$year)), 
+                            max(datos_mariposas$year, na.rm = TRUE), 
+                            as.integer(format(Sys.Date(), "%Y"))),
+                value = c(
+                  ifelse(any(!is.na(datos_mariposas$year)), 
+                         min(datos_mariposas$year, na.rm = TRUE), 1900),
+                  ifelse(any(!is.na(datos_mariposas$year)), 
+                         max(datos_mariposas$year, na.rm = TRUE), 
+                         as.integer(format(Sys.Date(), "%Y")))
+                ),
+                step = 1,
+                sep = "",
+                width = "100%",
+                ticks = TRUE,
+                animate = TRUE
+              )
+            )
+          ),
+          
+          # Botón para limpiar todos los filtros (como Power BI)
+          div(class = "d-grid gap-2 mt-3",
+            actionButton(
+              "limpiar_filtros",
+              "Limpiar todos los filtros",
+              class = "btn btn-outline-danger btn-sm",
+              title = "Restablecer todos los filtros a valores por defecto"
             )
           )
         ),
@@ -158,9 +440,8 @@ ui <- page_navbar(
             "tipo_visualizacion",
             "Visualización de datos:",
             choices = list(
-              "Puntos" = "points",
-              "Mapa de calor" = "heatmap",
-              "Densidad de kernel" = "density",
+              "Puntos (clustering)" = "points",
+              "Mapa de calor" = "heatmap", 
               "Bandas latitudinales" = "bands"
             ),
             selected = "points"
@@ -216,55 +497,73 @@ ui <- page_navbar(
           )
         ),
         
-        # Gráficos pequeños debajo
-        div(class = "mt-3",
-          layout_column_wrap(
-            width = 1/3,
-            
-            div(class = "content-box",
-              h6("Distribución por País"),
-              uiOutput("mini_pais")
-            ),
-            
-            div(class = "content-box",
-              h6("Distribución temporal"),
-              plotlyOutput("mini_temporal", height = 180)
-            ),
-            
-            div(class = "content-box",
-              h6("Diversidad por elevación"),
-              plotlyOutput("mini_elevacion", height = 180)
-            )
+        # Gráficos estadísticos mejorados debajo del mapa
+        layout_column_wrap(
+          width = 1/3,
+          
+          # 1. Diversidad taxonómica (mejorado)
+          div(class = "content-box",
+            h6("Diversidad Taxonómica"),
+            plotlyOutput("diversidad_taxonomica", height = 180)
+          ),
+          
+          # 2. Distribución por País (mejorado con clustering)
+          div(class = "content-box",
+            h6("Distribución Geográfica"), 
+            plotlyOutput("distribucion_geografica", height = 180)
+          ),
+          
+          # 3. Índice de Shannon - Diversidad (reemplaza concentración espacial)
+          div(class = "content-box",
+            h6("Índice de Shannon"),
+            plotlyOutput("indice_shannon", height = 180)
           )
         )
       )
     )
   ),
   
-  # Tab 2: Análisis Ecológico
+  # Tab 2: Análisis Estadísticos
   nav_panel(
-    title = "Análisis Ecológico",
-    icon = icon("leaf"),
+    title = "Análisis Estadísticos", 
+    icon = icon("chart-line"),
     
-    # Mostrar resumen de filtros activos
-    div(class = "alert alert-info mb-3",
-        textOutput("filtros_activos")
+    # Mostrar resumen de filtros activos con botón limpiar
+    div(class = "alert alert-info mb-3 d-flex justify-content-between align-items-center",
+        div(textOutput("filtros_activos")),
+        actionButton(
+          "limpiar_filtros_analisis",
+          "Limpiar filtros",
+          class = "btn btn-outline-danger btn-sm",
+          title = "Restablecer todos los filtros"
+        )
     ),
     
+    # Máximo 4 gráficos bien organizados y útiles
     layout_column_wrap(
-      width = 1,
+      width = 1/2,
       
-      # Análisis 1: Riqueza de especies por gradiente altitudinal
+      # Análisis 1: Diversidad por Género (Interactivo)
       card(
-        card_header("Diversidad a lo largo del gradiente altitudinal"),
+        card_header("Diversidad por País (Treemap)"),
         card_body(
-          plotlyOutput("analisis_altitudinal", height = 400)
+          plotlyOutput("analisis_altitudinal", height = 450)
         ),
         card_footer(
-          p("Este análisis muestra cómo varía la diversidad de especies según la altitud. 
-            Las mariposas Ithomiini suelen tener preferencias altitudinales específicas, 
-            con mayor diversidad en zonas de bosque nuboso entre 1000-2000m.", 
-            class = "text-muted")
+          p("Visualización jerárquica mostrando la diversidad de especies por país. Ideal para grandes datasets de biodiversidad.", 
+            class = "text-muted small")
+        )
+      ),
+      
+      # Análisis 2: Mapa de Calor de Co-ocurrencia
+      card(
+        card_header("Co-ocurrencia de Géneros por País"),
+        card_body(
+          plotlyOutput("analisis_coocurrencia", height = 450)
+        ),
+        card_footer(
+          p("Matriz de presencia/ausencia de géneros por país. Muestra patrones biogeográficos y distribuciones.", 
+            class = "text-muted small")
         )
       )
     ),
@@ -272,42 +571,27 @@ ui <- page_navbar(
     layout_column_wrap(
       width = 1/2,
       
-      # Análisis 2: Matriz simplificada de presencia
+      # Análisis 3: Sunburst Taxonómico
       card(
-        card_header("Presencia de especies principales"),
+        card_header("Jerarquía Taxonómica (Sunburst)"),
         card_body(
-          plotlyOutput("matriz_presencia", height = 350)
+          plotlyOutput("analisis_redes", height = 450)
         ),
         card_footer(
-          p("Muestra la presencia/ausencia de las especies más comunes en cada país. 
-            Útil para identificar patrones biogeográficos.", 
+          p("Visualización circular de la jerarquía: Subfamilia → Tribu → Género. Ideal para entender relaciones taxonómicas.", 
             class = "text-muted small")
         )
       ),
       
-      # Análisis 3: Fenología explicada
+      # Análisis 4: Tendencias Temporales por Décadas
       card(
-        card_header("Patrones fenológicos - Actividad anual"),
+        card_header("Tendencias de Diversidad Temporal"),
         card_body(
-          plotlyOutput("fenologia", height = 350)
+          plotlyOutput("analisis_estacional", height = 450)
         ),
         card_footer(
-          p("La fenología estudia cuándo las mariposas están más activas durante el año. 
-            Los picos indican las mejores épocas para observación y muestreo. 
-            Las Ithomiini suelen ser más abundantes en la estación seca.", 
+          p("Evolución de la diversidad y esfuerzo de muestreo por décadas. Muestra tendencias en la investigación de biodiversidad.", 
             class = "text-muted small")
-        )
-      )
-    ),
-    
-    # Información adicional relevante
-    layout_column_wrap(
-      width = 1,
-      
-      card(
-        card_header("Resumen ecológico de especies filtradas"),
-        card_body(
-          tableOutput("resumen_ecologico")
         )
       )
     )
@@ -341,167 +625,99 @@ server <- function(input, output, session) {
     areas_calculadas = list()
   )
   
-  # Filtro dinámico de especies
+  # Filtro dinámico de especies (usando función helper)
   output$ui_filtro_especie <- renderUI({
-    especies_disponibles <- if(!is.null(input$filtro_genero) && input$filtro_genero != "Todos") {
-      datos_mariposas %>%
-        filter(genus == input$filtro_genero) %>%
-        pull(species) %>%
-        unique() %>%
-        sort()
-    } else {
-      sort(unique(datos_mariposas$species))
-    }
-    
-    pickerInput(
-      "filtro_especie",
-      "Especie:",
-      choices = c("Todas", especies_disponibles),
-      selected = "Todas",
-      options = list(
-        liveSearch = TRUE,
-        size = 10
-      )
+    create_dynamic_filter(
+      data = datos_mariposas,
+      column = "species",
+      filter_name = "filtro_especie",
+      label = "Especie",
+      selected_genus = input$filtro_genero
     )
   })
   
-  # Filtro dinámico de subespecies
+  # Filtro dinámico de subespecies (usando función helper)
   output$ui_filtro_subespecie <- renderUI({
-    subespecies_disponibles <- datos_mariposas
-    
-    # Filtrar por género si está seleccionado
-    if(!is.null(input$filtro_genero) && input$filtro_genero != "Todos") {
-      subespecies_disponibles <- subespecies_disponibles %>%
-        filter(genus == input$filtro_genero)
-    }
-    
-    # Filtrar por especie si está seleccionada
-    if(!is.null(input$filtro_especie) && input$filtro_especie != "Todas") {
-      subespecies_disponibles <- subespecies_disponibles %>%
-        filter(species == input$filtro_especie)
-    }
-    
-    # Obtener subespecies únicas
-    subespecies_lista <- subespecies_disponibles %>%
-      pull(sub_species) %>%
-      unique() %>%
-      sort()
-    
-    # Quitar "No registrada" si existe
-    subespecies_lista <- subespecies_lista[subespecies_lista != "No registrada"]
-    
-    pickerInput(
-      "filtro_subespecie",
-      "Subespecie:",
-      choices = c("Todas", subespecies_lista),
-      selected = "Todas",
-      options = list(
-        liveSearch = TRUE,
-        size = 10
-      )
+    create_dynamic_filter(
+      data = datos_mariposas,
+      column = "sub_species",
+      filter_name = "filtro_subespecie",
+      label = "Subespecie",
+      selected_genus = input$filtro_genero,
+      selected_species = input$filtro_especie
     )
   })
   
-  # Modificar la función datos_filtrados para resolver el problema de filtrado
+  # Función datos_filtrados optimizada con funciones helper
   datos_filtrados <- reactive({
-    # Simplificar y hacer que funcione de manera más robusta
-    df <- datos_mariposas
+    # DEBUG: Ver TODOS los inputs
+    cat("DEBUG DATOS_FILTRADOS - Revisando inputs:\n")
+    cat("   • filtro_genero:", input$filtro_genero, "\n")
+    cat("   • filtro_especie:", input$filtro_especie, "\n")
+    cat("   • filtro_pais:", paste(input$filtro_pais, collapse = ", "), "\n")
+    cat("   • enable_date_filter:", input$enable_date_filter, "\n")
     
-    # Aplicar filtros básicos primero
-    if(!is.null(input$filtro_genero) && input$filtro_genero != "Todos") {
-      df <- df %>% filter(genus == input$filtro_genero)
-    }
+    # Crear objeto de filtros
+    filter_list <- list(
+      genus = input$filtro_genero,
+      species = input$filtro_especie,
+      subspecies = input$filtro_subespecie,
+      subfamily = input$filtro_subfamily,
+      tribe = input$filtro_tribe,
+      countries = input$filtro_pais,
+      enable_date = input$enable_date_filter,
+      year_range = input$rango_anios
+    )
     
-    if(!is.null(input$filtro_especie) && input$filtro_especie != "Todas") {
-      df <- df %>% filter(species == input$filtro_especie)
-    }
+    # Aplicar filtros usando función helper
+    df <- apply_filters(datos_mariposas, filter_list)
     
-    if(!is.null(input$filtro_subespecie) && input$filtro_subespecie != "Todas") {
-      df <- df %>% filter(sub_species == input$filtro_subespecie)
-    }
-    
-    if(!is.null(input$filtro_pais) && length(input$filtro_pais) > 0 && !"Todos" %in% input$filtro_pais) {
-      df <- df %>% filter(country %in% input$filtro_pais)
-    }
-    
-    # Solo aplicar filtro de años si está bien definido y si hay columna year
-    if("year" %in% names(df) && !is.null(input$rango_anios) && length(input$rango_anios) == 2) {
-      # Solo aplicar si los valores no son NA
-      if(!is.na(input$rango_anios[1]) && !is.na(input$rango_anios[2])) {
-        # Usar try para evitar errores
-        tryCatch({
-          df <- df %>% filter(year >= input$rango_anios[1] & year <= input$rango_anios[2])
-        }, error = function(e) {
-          # Si hay error, devolver todos los datos
-          message("Error al filtrar por año: ", e$message)
-        })
-      }
-    }
-    
-    # Si no quedan datos después del filtrado, devolver todos
+    # NO devolver todos los datos si no hay resultados - devolver datos vacíos
     if(nrow(df) == 0) {
-      warning("No hay datos después del filtrado. Mostrando todos los datos.")
-      return(datos_mariposas)
+      cat("WARNING No hay datos después del filtrado\n")
+      # Devolver estructura vacía pero con las mismas columnas
+      return(datos_mariposas[0, ])
     }
     
     return(df)
   })
   
-  # Modificar la función datos_mapa para que use los datos filtrados correctamente
+  # FUNCIÓN SIMPLE - SIEMPRE TODOS LOS DATOS
   datos_mapa <- reactive({
-    # Usar el resultado de datos_filtrados
-    df <- datos_filtrados()
+    df_filtered <- datos_filtrados()
+    df_coords <- validate_coordinates(df_filtered)
     
-    # Obtener solo los que tienen coordenadas válidas
-    df_coords <- df %>%
-      filter(has_coords == TRUE & !is.na(longitude) & !is.na(latitude) & 
-             longitude != 0 & latitude != 0 & 
-             longitude >= -180 & longitude <= 180 & 
-             latitude >= -90 & latitude <= 90)
+    # SIMPLE: Devolver TODOS los datos SIEMPRE
+    result <- list(
+      data = df_coords,
+      original_size = nrow(df_coords),
+      display_size = nrow(df_coords),
+      method = "all_data"
+    )
     
-    # Debugging
-    print(paste("Total de registros filtrados:", nrow(df)))
-    print(paste("Registros con coordenadas válidas:", nrow(df_coords)))
+    cat("INFO DATOS FILTRADOS:", nrow(df_filtered), "registros\n")
+    cat("INFO CON COORDENADAS VÁLIDAS:", nrow(df_coords), "registros\n")
     
-    return(df_coords)
+    return(result)
   })
   
-  # Mostrar filtros activos
+  # Mostrar filtros activos usando función helper
   output$filtros_activos <- renderText({
-    filtros <- c()
+    filter_list <- list(
+      genus = input$filtro_genero,
+      species = input$filtro_especie,
+      subspecies = input$filtro_subespecie,
+      subfamily = input$filtro_subfamily,
+      tribe = input$filtro_tribe,
+      countries = input$filtro_pais,
+      enable_date = input$enable_date_filter,
+      year_range = input$rango_anios
+    )
     
-    if(!is.null(input$filtro_genero) && input$filtro_genero != "Todos") {
-      filtros <- c(filtros, paste("Género:", input$filtro_genero))
-    }
-    
-    if(!is.null(input$filtro_especie) && input$filtro_especie != "Todas") {
-      filtros <- c(filtros, paste("Especie:", input$filtro_especie))
-    }
-    
-    if(!is.null(input$filtro_subespecie) && input$filtro_subespecie != "Todas") {
-      filtros <- c(filtros, paste("Subespecie:", input$filtro_subespecie))
-    }
-    
-    if(!is.null(input$filtro_pais) && length(input$filtro_pais) > 0 && !"Todos" %in% input$filtro_pais) {
-      if(length(input$filtro_pais) <= 3) {
-        filtros <- c(filtros, paste("Países:", paste(input$filtro_pais, collapse = ", ")))
-      } else {
-        filtros <- c(filtros, paste("Países:", length(input$filtro_pais), "seleccionados"))
-      }
-    }
-    
-    if(!is.null(input$rango_anios) && length(input$rango_anios) == 2) {
-      filtros <- c(filtros, paste("Años:", input$rango_anios[1], "-", input$rango_anios[2]))
-    }
-    
-    if(length(filtros) == 0) {
-      "Mostrando todos los datos disponibles"
-    } else {
-      paste("Filtros activos:", paste(filtros, collapse = " | "))
-    }
+    create_active_filters_text(filter_list)
   })
   
-  # Outputs de resumen
+  # Outputs de resumen optimizados
   output$total_registros <- renderText({
     format(nrow(datos_filtrados()), big.mark = ",")
   })
@@ -511,15 +727,15 @@ server <- function(input, output, session) {
   })
   
   output$info_mapa <- renderText({
-    n_mapa <- nrow(datos_mapa())
+    optimization_result <- datos_mapa()
+    n_mapa <- optimization_result$display_size
     n_total <- nrow(datos_filtrados())
     
     if(n_mapa == 0) {
       return("No hay registros con coordenadas válidas que mostrar")
     } else {
-      return(paste0("Mostrando ", format(n_mapa, big.mark = ","), 
-             " registros con coordenadas de ", 
-             format(n_total, big.mark = ","), " totales"))
+      # Mensaje simple siempre
+      return(paste0("Mostrando TODOS los ", format(n_mapa, big.mark = ","), " registros disponibles"))
     }
   })
   
@@ -570,12 +786,26 @@ server <- function(input, output, session) {
     input$filtro_genero,
     input$filtro_especie,
     input$filtro_subespecie,
+    input$filtro_subfamily,
+    input$filtro_tribe,
     input$filtro_pais,
+    input$enable_date_filter,
     input$rango_anios,
     input$tipo_visualizacion
   ), {
-    # Obtener datos filtrados
-    df <- isolate(datos_mapa())
+    # DEBUG: Verificar que el observeEvent se ejecuta
+    cat("DEBUG OBSERVADOR EJECUTADO - Actualizando mapa\n")
+    
+    # LÓGICA ULTRA SIMPLE - Solo obtener TODOS los datos filtrados
+    optimization_result <- datos_mapa()
+    df <- optimization_result$data
+    
+    # DEBUG: Mostrar cuántos datos se van a mapear
+    cat("DEBUG DATOS PARA MAPA:", nrow(df), "registros\n")
+    
+    # Mostrar información de cuántos registros se están mostrando vs total
+    total_available <- optimization_result$original_size
+    currently_showing <- optimization_result$display_size
     
     # Crear filtros de texto para leyenda
     filters_text <- c()
@@ -584,12 +814,20 @@ server <- function(input, output, session) {
       filters_text <- c(filters_text, paste("<b>Género:</b>", input$filtro_genero))
     }
     
-    if(!is.null(input$filtro_especie) && input$filtro_especie != "Todas") {
+    if(!is.null(input$filtro_especie) && !input$filtro_especie %in% c("Todas", "Todos")) {
       filters_text <- c(filters_text, paste("<b>Especie:</b>", input$filtro_especie))
     }
     
-    if(!is.null(input$filtro_subespecie) && input$filtro_subespecie != "Todas") {
+    if(!is.null(input$filtro_subespecie) && !input$filtro_subespecie %in% c("Todas", "Todos")) {
       filters_text <- c(filters_text, paste("<b>Subespecie:</b>", input$filtro_subespecie))
+    }
+    
+    if(!is.null(input$filtro_subfamily) && !input$filtro_subfamily %in% c("Todas", "Todos")) {
+      filters_text <- c(filters_text, paste("<b>Subfamilia:</b>", input$filtro_subfamily))
+    }
+    
+    if(!is.null(input$filtro_tribe) && input$filtro_tribe != "Todas") {
+      filters_text <- c(filters_text, paste("<b>Tribu:</b>", input$filtro_tribe))
     }
     
     if(!is.null(input$filtro_pais) && length(input$filtro_pais) > 0 && !"Todos" %in% input$filtro_pais) {
@@ -600,11 +838,12 @@ server <- function(input, output, session) {
       }
     }
     
-    if(!is.null(input$rango_anios) && length(input$rango_anios) == 2) {
+    if(!is.null(input$enable_date_filter) && input$enable_date_filter == TRUE &&
+       !is.null(input$rango_anios) && length(input$rango_anios) == 2) {
       filters_text <- c(filters_text, paste("<b>Años:</b>", input$rango_anios[1], "-", input$rango_anios[2]))
     }
     
-    # Construir leyenda HTML
+    # Construir leyenda HTML solo con filtros (sin info de optimización)
     legend_html <- NULL
     if(length(filters_text) > 0) {
       legend_html <- paste(
@@ -621,7 +860,10 @@ server <- function(input, output, session) {
       clearHeatmap() %>%
       clearShapes() %>%
       clearControls() %>%
-      clearMarkerClusters() # Asegurarse de limpiar los clusters también
+      clearMarkerClusters() %>% # Asegurarse de limpiar los clusters también
+      clearGroup("bandas_latitudinales") %>%
+      clearGroup("leyenda_bandas") %>%
+      clearGroup("puntos_bandas")
     
     # Si no hay datos, mostrar mensaje y salir
     if(nrow(df) == 0) {
@@ -668,33 +910,42 @@ server <- function(input, output, session) {
       return()
     }
     
-    # Según el tipo de visualización, agregar la capa correspondiente
+    # VISUALIZACIÓN DINÁMICA COMPLETA: Puntos con clustering ESTILO ORIGINAL
     if(input$tipo_visualizacion == "points") {
-      # Visualización de puntos con clusters
+      # USAR ESTILO POR DEFECTO de Leaflet + CircleMarkers (no GPS icons)
       leafletProxy("mapa_principal") %>%
         addCircleMarkers(
           data = df,
           lng = ~longitude,
           lat = ~latitude,
           popup = ~paste0(
-            "<strong>", scientific_name, "</strong><br>",
-            ifelse(!is.na(sub_species) & sub_species != "No registrada",
-              paste0("Subespecie: ", sub_species, "<br>"),
+            "<div style='max-width:300px;'>",
+            "<h4 style='margin:0 0 10px 0;color:#2c3e50;'>", scientific_name, "</h4>",
+            ifelse(!is.na(sub_species) & sub_species != "No registrada" & sub_species != "NA",
+              paste0("<p><strong>Subespecie:</strong> ", sub_species, "</p>"),
               ""),
-            "País: ", country, "<br>",
-            "Coordenadas: ", round(latitude, 4), ", ", round(longitude, 4),
-            ifelse(!is.na(altitude), paste0("<br>Altitud: ", round(altitude, 0), " m"), ""),
-            ifelse(!is.na(year), paste0("<br>Año: ", year), "")
+            "<p><strong>País:</strong> ", country, "</p>",
+            "<p><strong>Coordenadas:</strong> ", round(latitude, 4), "°, ", round(longitude, 4), "°</p>",
+            ifelse(!is.na(altitude), paste0("<p><strong>Altitud:</strong> ", format(round(altitude, 0), big.mark = ","), " m</p>"), ""),
+            ifelse(!is.na(year), paste0("<p><strong>Año:</strong> ", year, "</p>"), ""),
+            "</div>"
           ),
           radius = 6,
           color = "#2c3e50",
           fillColor = "#3498db",
           fillOpacity = 0.7,
           weight = 2,
-          clusterOptions = markerClusterOptions()
+          clusterOptions = markerClusterOptions(
+            showCoverageOnHover = FALSE,
+            maxClusterRadius = 80,
+            disableClusteringAtZoom = 16,
+            spiderfyOnMaxZoom = TRUE,
+            zoomToBoundsOnClick = TRUE
+            # SIN iconCreateFunction = ESTILO POR DEFECTO de Leaflet
+          )
         )
     } else if(input$tipo_visualizacion == "heatmap") {
-      # Mapa de calor - sin clusters
+      # Mapa de calor fijo - no cambia con zoom
       leafletProxy("mapa_principal") %>%
         addHeatmap(
           data = df,
@@ -702,95 +953,83 @@ server <- function(input, output, session) {
           lat = ~latitude,
           blur = 20,
           max = 0.05,
-          radius = 15
+          radius = 15,
+          minOpacity = 0.05
         )
-    } else if(input$tipo_visualizacion == "density") {
-      # Densidad de kernel
-      if(nrow(df) >= 10) {
-        # Crear grid de densidad
-        tryCatch({
-          if(!requireNamespace("MASS", quietly = TRUE)) {
-            showNotification(
-              "El paquete MASS no está instalado. No se puede mostrar la densidad de kernel.",
-              type = "error",
-              duration = 5
-            )
-            return()
-          }
-          
-          dens <- MASS::kde2d(df$longitude, df$latitude, n = 50)
-          
-          # Convertir a formato para leaflet con manejo de errores
-          densdf <- expand.grid(x = dens$x, y = dens$y)
-          densdf$z <- as.vector(dens$z)
-          
-          # Definir quantiles con manejo de errores
-          q90 <- quantile(densdf$z, 0.9, na.rm = TRUE)
-          q75 <- quantile(densdf$z, 0.75, na.rm = TRUE)
-          q50 <- quantile(densdf$z, 0.5, na.rm = TRUE)
-          
-          # Solo agregar polígonos si hay datos válidos
-          if(any(densdf$z > q90, na.rm = TRUE)) {
-            # Crear puntos únicos para evitar el error
-            high_density <- densdf %>% 
-              filter(z > q90) %>%
-              distinct(x, y, .keep_all = TRUE)
-            
-            if(nrow(high_density) > 2) {
-              leafletProxy("mapa_principal") %>%
-                addCircles(
-                  data = high_density,
-                  lng = ~x, lat = ~y,
-                  radius = 50000,
-                  fillColor = "red",
-                  fillOpacity = 0.3,
-                  weight = 1,
-                  color = "darkred"
-                )
-            }
-          }
-          
-          # Agregar leyenda
-          leafletProxy("mapa_principal") %>%
-            addLegend(
-              position = "bottomright",
-              colors = c("red", "orange", "yellow"),
-              labels = c("Alta densidad", "Media densidad", "Baja densidad"),
-              title = "Densidad de registros"
-            )
-        }, error = function(e) {
-          showNotification(
-            "Error al calcular la densidad de kernel. Verifica que los datos sean válidos.",
-            type = "error",
-            duration = 5
-          )
-        })
-      }
     } else if(input$tipo_visualizacion == "bands") {
-      # Bandas latitudinales
-      lat_range <- range(df$latitude)
-      lat_breaks <- seq(lat_range[1], lat_range[2], length.out = input$num_bandas + 1)
+      # Bandas latitudinales - optimizado para mejor rendimiento
+      lat_range <- range(df$latitude, na.rm = TRUE)
       
-      # Asignar banda a cada punto
-      df$banda <- cut(df$latitude, breaks = lat_breaks, labels = FALSE, include.lowest = TRUE)
-      
-      # Contar especies por banda
-      bandas_resumen <- df %>%
-        group_by(banda) %>%
-        summarise(
-          n_registros = n(),
-          n_especies = n_distinct(scientific_name),
-          lat_min = lat_breaks[unique(banda)],
-          lat_max = lat_breaks[unique(banda) + 1],
-          .groups = 'drop'
+      # Validar que hay rango válido
+      if(is.finite(lat_range[1]) && is.finite(lat_range[2]) && lat_range[1] != lat_range[2]) {
+        lat_breaks <- seq(lat_range[1], lat_range[2], length.out = input$num_bandas + 1)
+        
+        # Asignar banda a cada punto de forma más eficiente
+        df$banda <- cut(df$latitude, breaks = lat_breaks, labels = FALSE, include.lowest = TRUE)
+        
+        # Optimización: Usar data.table o dplyr más eficiente para datasets grandes
+        if(nrow(df) > 5000) {
+          # Para datasets grandes, muestrear para el cálculo de especies
+          sample_size <- min(2000, nrow(df))
+          df_sample <- df[sample(nrow(df), sample_size), ]
+          
+          bandas_resumen <- df %>%
+            group_by(banda) %>%
+            summarise(
+              n_registros = n(),
+              .groups = 'drop'
+            ) %>%
+            left_join(
+              df_sample %>%
+                group_by(banda) %>%
+                summarise(
+                  n_especies = n_distinct(scientific_name),
+                  .groups = 'drop'
+                ),
+              by = "banda"
+            ) %>%
+            mutate(
+              n_especies = ifelse(is.na(n_especies), 0, n_especies)
+            )
+          
+          # Agregar coordenadas de las bandas
+          bandas_resumen$lat_min <- lat_breaks[bandas_resumen$banda]
+          bandas_resumen$lat_max <- lat_breaks[bandas_resumen$banda + 1]
+          
+        } else {
+          # Para datasets pequeños, cálculo completo
+          bandas_resumen <- df %>%
+            group_by(banda) %>%
+            summarise(
+              n_registros = n(),
+              n_especies = n_distinct(scientific_name),
+              .groups = 'drop'
+            )
+          
+          # Agregar coordenadas de las bandas
+          bandas_resumen$lat_min <- lat_breaks[bandas_resumen$banda]
+          bandas_resumen$lat_max <- lat_breaks[bandas_resumen$banda + 1]
+        }
+      } else {
+        # Si no hay rango válido, crear una banda única
+        bandas_resumen <- data.frame(
+          banda = 1,
+          n_registros = nrow(df),
+          n_especies = n_distinct(df$scientific_name),
+          lat_min = lat_range[1],
+          lat_max = lat_range[1] + 1
         )
+      }
       
       # Colores para las bandas
       pal <- colorNumeric(palette = "YlOrRd", domain = bandas_resumen$n_especies)
       
+      # Crear proxy del mapa una sola vez para eficiencia
+      map_proxy <- leafletProxy("mapa_principal")
+      
       # Agregar rectángulos de bandas
       for(i in 1:nrow(bandas_resumen)) {
-        leafletProxy("mapa_principal") %>%
+        map_proxy %>%
           addRectangles(
             lng1 = -180, lng2 = 180,
             lat1 = bandas_resumen$lat_min[i],
@@ -799,36 +1038,80 @@ server <- function(input, output, session) {
             fillOpacity = 0.3,
             weight = 2,
             color = "black",
+            group = "bandas_latitudinales",
             popup = paste0(
               "Banda ", i, "<br>",
               "Latitud: ", round(bandas_resumen$lat_min[i], 2), 
-              "° a ", round(bandas_resumen$lat_max[i], 2), "°<br>",
+              " a ", round(bandas_resumen$lat_max[i], 2), "<br>",
               "Registros: ", bandas_resumen$n_registros[i], "<br>",
               "Especies: ", bandas_resumen$n_especies[i]
             )
           )
       }
       
-      # Agregar leyenda
-      leafletProxy("mapa_principal") %>%
+      # Agregar leyenda con información sobre optimización
+      legend_title <- if(nrow(df) > 5000) {
+        paste("Especies por banda", "(estimado)")
+      } else {
+        "Especies por banda"
+      }
+      
+      map_proxy %>%
         addLegend(
           position = "bottomright",
           pal = pal,
           values = bandas_resumen$n_especies,
-          title = "Especies por banda"
+          title = legend_title,
+          group = "leyenda_bandas"
         )
       
-      # Agregar puntos encima sin clusterización
-      leafletProxy("mapa_principal") %>%
-        addCircleMarkers(
-          data = df,
-          lng = ~longitude,
-          lat = ~latitude,
-          radius = 4,
-          fillOpacity = 0.8,
-          weight = 1,
-          clusterOptions = NULL  # Sin clusterización
-        )
+
+      
+      # Optimización: Solo agregar puntos si hay menos de 1000 registros para mejor rendimiento
+      if(nrow(df) <= 1000) {
+        # Agregar puntos sin clusterización para datasets pequeños
+        map_proxy %>%
+          addCircleMarkers(
+            data = df,
+            lng = ~longitude,
+            lat = ~latitude,
+            radius = 3,
+            fillOpacity = 0.6,
+            weight = 1,
+            color = "#2c3e50",
+            fillColor = "#3498db",
+            group = "puntos_bandas",
+            popup = ~paste0(
+              "<strong>", scientific_name, "</strong><br>",
+              "Banda: ", banda, "<br>",
+              "País: ", country, "<br>",
+              "Coordenadas: ", round(latitude, 4), ", ", round(longitude, 4)
+            )
+          )
+      } else {
+        # Para datasets grandes, agregar con clustering para mejor rendimiento
+        map_proxy %>%
+          addCircleMarkers(
+            data = df,
+            lng = ~longitude,
+            lat = ~latitude,
+            radius = 2,
+            fillOpacity = 0.4,
+            weight = 0.5,
+            color = "#2c3e50",
+            fillColor = "#3498db",
+            group = "puntos_bandas",
+            clusterOptions = markerClusterOptions(
+              maxClusterRadius = 50,
+              showCoverageOnHover = FALSE
+            ),
+            popup = ~paste0(
+              "<strong>", scientific_name, "</strong><br>",
+              "Banda: ", banda, "<br>",
+              "País: ", country
+            )
+          )
+      }
     }
     
     # Agregar la leyenda de filtros si existe
@@ -926,8 +1209,8 @@ server <- function(input, output, session) {
             displayModeBar = TRUE,
             displaylogo = FALSE,
             scrollZoom = TRUE,
-            modeBarButtonsToShow = list(
-              'zoomIn2d', 'zoomOut2d', 'resetScale2d'
+            modeBarButtonsToRemove = list(
+              'select2d', 'lasso2d', 'autoScale2d', 'pan2d'
             )
           )
         })
@@ -1179,228 +1462,330 @@ server <- function(input, output, session) {
     }
   })
   
-  # ANÁLISIS ECOLÓGICO
+  # ANÁLISIS ECOLÓGICO - NUEVOS GRÁFICOS APROPIADOS PARA BIODIVERSIDAD
   
-  # 1. Diversidad altitudinal - implementamos una visualización alternativa
+  # 1. Treemap de especies por país
   output$analisis_altitudinal <- renderPlotly({
-    df <- datos_filtrados() %>%
-      filter(!is.na(altitude))
+    df <- datos_filtrados()
     
-    if(nrow(df) > 10) {
-      # Método 1: Gráfico de dispersión para mostrar la riqueza por altitud
-      # Crear bins de altitud para agrupar los datos
-      bin_size <- 200  # tamaño del bin en metros
-      max_alt <- max(df$altitude, na.rm = TRUE)
-      min_alt <- min(df$altitude, na.rm = TRUE)
+    if(nrow(df) > 20) {
+      # Crear datos para treemap - especies por país con géneros
+      treemap_data <- df %>%
+        group_by(country, genus) %>%
+        summarise(
+          n_especies = n_distinct(scientific_name),
+          n_registros = n(),
+          .groups = 'drop'
+        ) %>%
+        arrange(desc(n_especies)) %>%
+        head(30)  # Limitar para evitar sobrecarga visual
       
-      # Crear breaks más pequeños para mayor detalle
-      n_bins <- max(10, min(30, ceiling((max_alt - min_alt) / bin_size)))
+      # Preparar datos para el treemap con jerarquía
+      total_data <- treemap_data %>%
+        group_by(country) %>%
+        summarise(
+          total_especies = sum(n_especies),
+          total_registros = sum(n_registros),
+          .groups = 'drop'
+        ) %>%
+        arrange(desc(total_especies)) %>%
+        head(12)  # Top 12 países
       
-      # Crear un dataframe con bins de altitud
-      df_bins <- data.frame(
-        bin_min = seq(min_alt, max_alt, length.out = n_bins)
+      # Crear treemap usando plotly
+      plot_ly(
+        data = total_data,
+        type = "treemap",
+        labels = ~paste0(country, "<br>", total_especies, " especies"),
+        values = ~total_especies,
+        parents = "",
+        textinfo = "label+value+percent parent",
+        textfont = list(size = 12, color = "white"),
+        marker = list(
+          colorscale = list(
+            c(0, "#2ECC71"),
+            c(0.5, "#F39C12"),
+            c(1, "#E74C3C")
+          ),
+          colorbar = list(title = "Especies"),
+          line = list(width = 2, color = "white")
+        ),
+        hovertemplate = '<b>%{label}</b><br>Especies: %{value}<br>Porcentaje: %{percentParent}<extra></extra>'
+      ) %>%
+      layout(
+        title = "Diversidad de especies por país (Treemap)",
+        font = list(size = 12),
+        margin = list(l = 20, r = 20, b = 20, t = 40)
+      ) %>%
+      config(
+        displayModeBar = TRUE,
+        displaylogo = FALSE,
+        modeBarButtonsToShow = list('toImage', 'resetScale2d')
       )
-      df_bins$bin_max <- c(df_bins$bin_min[-1], max_alt + 1)
-      df_bins$bin_mid <- (df_bins$bin_min + df_bins$bin_max) / 2
-      df_bins$bin_label <- paste0(round(df_bins$bin_min), "-", round(df_bins$bin_max), "m")
       
-      # Calcular especies por bin
-      df_bins$n_especies <- sapply(1:nrow(df_bins), function(i) {
-        sum(df$altitude >= df_bins$bin_min[i] & df$altitude < df_bins$bin_max[i])
-      })
+    } else {
+      plotly_empty() %>%
+        layout(title = "Datos insuficientes para análisis (mínimo 20 registros)")
+    }
+  })
+  
+  # 2. Mapa de calor mejorado de co-ocurrencia
+  output$analisis_coocurrencia <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) > 50) {
+      # Análisis de co-ocurrencia de géneros por país
+      genera_paises <- df %>%
+        select(genus, country) %>%
+        distinct() %>%
+        count(genus) %>%
+        arrange(desc(n)) %>%
+        head(15)  # Top 15 géneros más distribuidos
       
-      # Calcular riqueza de especies por bin
-      df_bins$riqueza <- sapply(1:nrow(df_bins), function(i) {
-        especies <- df %>% 
-          filter(altitude >= df_bins$bin_min[i] & altitude < df_bins$bin_max[i]) %>%
-          pull(scientific_name) %>%
-          unique() %>%
-          length()
-        return(especies)
-      })
+      paises_top <- df %>%
+        count(country) %>%
+        arrange(desc(n)) %>%
+        head(12) %>%  # Top 12 países
+        pull(country)
       
-      # Calcular índice de Shannon por bin
-      df_bins$shannon <- sapply(1:nrow(df_bins), function(i) {
-        especies <- df %>% 
-          filter(altitude >= df_bins$bin_min[i] & altitude < df_bins$bin_max[i]) %>%
-          pull(scientific_name)
-        
-        if(length(especies) > 0) {
-          freq <- table(especies)
-          prop <- freq/sum(freq)
-          return(-sum(prop * log(prop)))
-        } else {
-          return(0)
-        }
-      })
+      # Crear matriz de presencia/ausencia
+      matriz <- df %>%
+        filter(genus %in% genera_paises$genus, country %in% paises_top) %>%
+        select(genus, country) %>%
+        distinct() %>%
+        mutate(presente = 1) %>%
+        pivot_wider(names_from = country, values_from = presente, values_fill = 0) %>%
+        column_to_rownames("genus") %>%
+        as.matrix()
       
-      # Crear un gráfico más intuitivo
-      plot_ly() %>%
-        # Barras para número de especies
-        add_bars(
-          data = df_bins,
-          x = ~bin_mid,
-          y = ~riqueza,
-          name = "Riqueza de especies",
-          marker = list(
-            color = colorRampPalette(c('#1f77b4', '#2ca02c'))(nrow(df_bins)),
-            line = list(color = 'rgba(0,0,0,0.3)', width = 1)
+      if(nrow(matriz) > 3 && ncol(matriz) > 3) {
+        plot_ly(
+          z = ~matriz,
+          x = colnames(matriz),
+          y = rownames(matriz),
+          type = "heatmap",
+          colorscale = list(
+            c(0, "rgba(236, 240, 241, 0.8)"),
+            c(0.3, "rgba(52, 152, 219, 0.6)"),
+            c(0.7, "rgba(46, 204, 113, 0.8)"),
+            c(1, "rgba(231, 76, 60, 1)")
           ),
-          hovertemplate = '<b>Altitud: %{text}</b><br>Especies: %{y}<extra></extra>',
-          text = ~bin_label
-        ) %>%
-        # Línea para índice de Shannon
-        add_trace(
-          data = df_bins,
-          x = ~bin_mid,
-          y = ~shannon,
-          type = 'scatter',
-          mode = 'lines+markers',
-          name = 'Índice de Shannon',
-          yaxis = 'y2',
-          line = list(
-            color = '#e74c3c',
-            width = 3,
-            shape = 'spline'
-          ),
-          marker = list(
-            color = '#c0392b',
-            size = 8,
-            line = list(color = 'white', width = 1)
-          ),
-          hovertemplate = '<b>Altitud: %{text}</b><br>Shannon: %{y:.2f}<extra></extra>',
-          text = ~bin_label
-        ) %>%
-        # Opcional: agregar scatter plot para visualizar densidad de registros
-        add_trace(
-          data = df_bins,
-          x = ~bin_mid,
-          y = ~n_especies,
-          type = 'scatter',
-          mode = 'markers',
-          name = 'Registros',
-          yaxis = 'y3',
-          marker = list(
-            color = 'rgba(150, 150, 150, 0.7)',
-            size = ~sqrt(n_especies) * 2,
-            line = list(color = 'white', width = 1)
-          ),
-          hovertemplate = '<b>Altitud: %{text}</b><br>Registros: %{customdata}<extra></extra>',
-          text = ~bin_label,
-          customdata = ~n_especies
+          hovertemplate = '<b>Género</b>: %{y}<br><b>País</b>: %{x}<br><b>Presente</b>: %{z}<extra></extra>',
+          showscale = TRUE,
+          colorbar = list(
+            title = "Presencia",
+            tickmode = "array",
+            tickvals = c(0, 1),
+            ticktext = c("Ausente", "Presente")
+          )
         ) %>%
         layout(
-          title = "Riqueza de especies e índice de diversidad por elevación",
+          title = "Presencia de géneros por país",
           xaxis = list(
-            title = "Altitud (m)",
-            zeroline = TRUE,
-            showgrid = TRUE,
-            gridcolor = 'rgba(0,0,0,0.1)',
-            fixedrange = FALSE
+            title = "País",
+            tickangle = -45,
+            tickfont = list(size = 11)
           ),
           yaxis = list(
-            title = "Riqueza de especies",
-            titlefont = list(color = '#1f77b4'),
-            tickfont = list(color = '#1f77b4'),
-            showgrid = TRUE,
-            gridcolor = 'rgba(0,0,0,0.1)',
-            fixedrange = FALSE
+            title = "Género",
+            tickfont = list(size = 11)
           ),
-          yaxis2 = list(
-            title = "Índice de Shannon",
-            overlaying = "y",
-            side = "right",
-            titlefont = list(color = '#e74c3c'),
-            tickfont = list(color = '#e74c3c'),
-            showgrid = FALSE,
-            fixedrange = FALSE
-          ),
-          yaxis3 = list(
-            showticklabels = FALSE,
-            overlaying = "y",
-            side = "right",
-            showgrid = FALSE,
-            fixedrange = FALSE
-          ),
-          legend = list(
-            orientation = "h",
-            x = 0.5,
-            y = 1.1,
-            xanchor = "center"
-          ),
-          hovermode = 'closest',
-          margin = list(l = 60, r = 60, t = 50, b = 80),
-          plot_bgcolor = 'rgba(255,255,255,1)',
-          paper_bgcolor = 'rgba(255,255,255,1)',
-          dragmode = "zoom"
+          margin = list(l = 100, r = 60, b = 100, t = 60)
         ) %>%
         config(
           displayModeBar = TRUE,
           displaylogo = FALSE,
-          scrollZoom = TRUE,
-          modeBarButtonsToShow = list(
-            'zoomIn2d', 'zoomOut2d', 'resetScale2d'
-          )
+          scrollZoom = TRUE
         )
-    } else if(nrow(df) > 0) {
-      # Para pocos datos, mostrar un gráfico simplificado
-      
-      # Organizar datos por especie y su rango altitudinal
-      especies_resumen <- df %>%
-        group_by(scientific_name) %>%
+      } else {
+        plotly_empty() %>%
+          layout(title = "Datos insuficientes para matriz de co-ocurrencia")
+      }
+    } else {
+      plotly_empty() %>%
+        layout(title = "Datos insuficientes para análisis (mínimo 50 registros)")
+    }
+  })
+  
+  # 3. Gráfico sunburst de jerarquía taxonómica
+  output$analisis_redes <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) > 30) {
+      # Preparar datos jerárquicos: Subfamilia -> Tribu -> Género
+      hierarchy_data <- df %>%
+        group_by(subfamily, tribe, genus) %>%
         summarise(
-          altitud_media = mean(altitude, na.rm = TRUE),
-          altitud_min = min(altitude, na.rm = TRUE),
-          altitud_max = max(altitude, na.rm = TRUE),
+          n_especies = n_distinct(scientific_name),
           n_registros = n(),
           .groups = 'drop'
         ) %>%
-        arrange(desc(n_registros))
-      
-      plot_ly() %>%
-        add_segments(
-          data = especies_resumen,
-          y = ~reorder(scientific_name, altitud_media),
-          x = ~altitud_min,
-          xend = ~altitud_max,
-          line = list(
-            color = 'rgba(150, 150, 150, 0.5)',
-            width = 2
-          ),
-          showlegend = FALSE,
-          hoverinfo = 'none'
+        filter(
+          subfamily != "No especificada",
+          tribe != "No especificada"
         ) %>%
-        add_markers(
-          data = especies_resumen,
-          y = ~reorder(scientific_name, altitud_media),
-          x = ~altitud_media,
-          marker = list(
-            color = 'rgba(39, 174, 96, 0.8)',
-            size = ~sqrt(n_registros) * 4,
-            line = list(color = 'rgba(0, 0, 0, 0.3)', width = 1)
+        arrange(desc(n_especies)) %>%
+        head(40)  # Limitar para mejor visualización
+      
+      if(nrow(hierarchy_data) > 5) {
+        # Crear estructura para sunburst
+        sunburst_data <- bind_rows(
+          # Nivel raíz
+          data.frame(
+            ids = "Ithomiini",
+            labels = "Ithomiini",
+            parents = "",
+            values = sum(hierarchy_data$n_especies)
           ),
-          hovertemplate = '<b>%{y}</b><br>Altitud media: %{x} m<br>Rango: %{text}<br>Registros: %{customdata}<extra></extra>',
-          text = ~paste(round(altitud_min), "-", round(altitud_max), "m"),
-          customdata = ~n_registros
+          # Subfamilias
+          hierarchy_data %>%
+            group_by(subfamily) %>%
+            summarise(values = sum(n_especies), .groups = 'drop') %>%
+            mutate(
+              ids = subfamily,
+              labels = subfamily,
+              parents = "Ithomiini"
+            ),
+          # Tribus
+          hierarchy_data %>%
+            group_by(subfamily, tribe) %>%
+            summarise(values = sum(n_especies), .groups = 'drop') %>%
+            mutate(
+              ids = paste(subfamily, tribe, sep = "_"),
+              labels = tribe,
+              parents = subfamily
+            ),
+          # Géneros
+          hierarchy_data %>%
+            mutate(
+              ids = paste(subfamily, tribe, genus, sep = "_"),
+              labels = genus,
+              parents = paste(subfamily, tribe, sep = "_"),
+              values = n_especies
+            )
+        )
+        
+        plot_ly(
+          data = sunburst_data,
+          type = 'sunburst',
+          ids = ~ids,
+          labels = ~labels,
+          parents = ~parents,
+          values = ~values,
+          branchvalues = "total",
+          hovertemplate = '<b>%{label}</b><br>Especies: %{value}<br>Porcentaje: %{percentParent}<extra></extra>',
+          maxdepth = 3,
+          insidetextorientation = 'radial'
         ) %>%
         layout(
-          title = "Distribución altitudinal por especie",
-          xaxis = list(title = "Altitud (m)"),
-          yaxis = list(title = "Especie"),
-          margin = list(l = 180, r = 20, t = 50, b = 50),
-          plot_bgcolor = 'rgba(255,255,255,1)',
-          paper_bgcolor = 'rgba(255,255,255,1)'
+          title = "Jerarquía taxonómica (Sunburst)",
+          font = list(size = 12),
+          margin = list(l = 20, r = 20, b = 20, t = 40)
         ) %>%
         config(
-          displayModeBar = FALSE
+          displayModeBar = TRUE,
+          displaylogo = FALSE,
+          modeBarButtonsToShow = list('toImage')
         )
+      } else {
+        plotly_empty() %>%
+          layout(title = "Datos taxonómicos insuficientes")
+      }
     } else {
       plotly_empty() %>%
+        layout(title = "Datos insuficientes para análisis jerárquico")
+    }
+  })
+  
+  # 4. Distribución temporal con patrón estacional mejorado
+  output$analisis_estacional <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) > 20) {
+      # Análisis de diversidad por décadas (en lugar de fenología simple)
+      decadas_data <- df %>%
+        filter(!is.na(year), year >= 1950) %>%
+        mutate(
+          decada = floor(year / 10) * 10,
+          decada_label = paste0(decada, "s")
+        ) %>%
+        group_by(decada, decada_label) %>%
+        summarise(
+          n_especies = n_distinct(scientific_name),
+          n_registros = n(),
+          n_paises = n_distinct(country),
+          .groups = 'drop'
+        ) %>%
+        arrange(decada)
+      
+      if(nrow(decadas_data) >= 3) {
+        # Gráfico de área apilada para mostrar tendencias temporales
+        plot_ly(decadas_data) %>%
+          add_bars(
+            x = ~decada_label,
+            y = ~n_registros,
+            name = "Registros totales",
+            yaxis = "y",
+            marker = list(color = 'rgba(52, 152, 219, 0.7)'),
+            hovertemplate = '<b>%{x}</b><br>Registros: %{y}<extra></extra>'
+          ) %>%
+          add_lines(
+            x = ~decada_label,
+            y = ~n_especies,
+            name = "Especies únicas",
+            yaxis = "y2",
+            line = list(color = 'rgba(231, 76, 60, 1)', width = 4),
+            marker = list(size = 10, color = 'rgba(231, 76, 60, 1)'),
+            hovertemplate = '<b>%{x}</b><br>Especies: %{y}<extra></extra>'
+          ) %>%
+          layout(
+            title = "Tendencias de diversidad por décadas",
+            xaxis = list(title = "Década"),
+            yaxis = list(
+              title = "Número de registros",
+              side = "left",
+              showgrid = FALSE
+            ),
+            yaxis2 = list(
+              title = "Número de especies",
+              side = "right",
+              overlaying = "y",
+              showgrid = FALSE
+            ),
+            legend = list(x = 0.02, y = 0.98),
+            margin = list(l = 60, r = 60, b = 50, t = 60)
+          ) %>%
+          config(
+            displayModeBar = TRUE,
+            displaylogo = FALSE,
+            scrollZoom = TRUE
+          )
+      } else {
+        # Gráfico de barras simple si hay pocos datos temporales
+        plot_ly(
+          x = c("1950-1979", "1980-1999", "2000-2019", "2020+"),
+          y = c(
+            sum(df$year >= 1950 & df$year < 1980, na.rm = TRUE),
+            sum(df$year >= 1980 & df$year < 2000, na.rm = TRUE),
+            sum(df$year >= 2000 & df$year < 2020, na.rm = TRUE),
+            sum(df$year >= 2020, na.rm = TRUE)
+          ),
+          type = 'bar',
+          marker = list(
+            color = c('#3498db', '#2ecc71', '#f39c12', '#e74c3c'),
+            line = list(color = 'white', width = 1)
+          ),
+          hovertemplate = '<b>%{x}</b><br>Registros: %{y}<extra></extra>'
+        ) %>%
         layout(
-          title = "No hay datos de altitud disponibles para los registros filtrados",
-          plot_bgcolor = 'rgba(255,255,255,1)',
-          paper_bgcolor = 'rgba(255,255,255,1)'
+          title = "Distribución temporal general",
+          xaxis = list(title = "Período"),
+          yaxis = list(title = "Registros"),
+          margin = list(l = 60, r = 20, b = 50, t = 60)
         )
+      }
+    } else {
+      plotly_empty() %>%
+        layout(title = "Datos temporales insuficientes")
     }
   })
   
@@ -1722,11 +2107,477 @@ server <- function(input, output, session) {
     }
   )
   
+  # ===================================================================
+  # NUEVOS GRÁFICOS OPTIMIZADOS PARA LOS DATOS DISPONIBLES
+  # ===================================================================
+  
+  # Gráficos debajo del mapa (simples e informativos)
+  output$diversidad_taxonomica <- renderPlotly({
+    df <- datos_filtrados()
+    
+    diversidad <- data.frame(
+      Categoria = c("Géneros", "Especies", "Subespecies"),
+      Cantidad = c(
+        n_distinct(df$genus, na.rm = TRUE),
+        n_distinct(df$species, na.rm = TRUE),
+        n_distinct(df$sub_species[df$sub_species != "NA" & !is.na(df$sub_species)], na.rm = TRUE)
+      )
+    )
+    
+    p <- plot_ly(diversidad, x = ~Categoria, y = ~Cantidad, type = 'bar',
+                 marker = list(color = c('#3498db', '#2c3e50', '#18bc9c'))) %>%
+      layout(
+        xaxis = list(title = ""),
+        yaxis = list(title = "Cantidad"),
+        margin = list(t = 20, r = 10, b = 40, l = 40),
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = FALSE)
+    
+    p
+  })
+  
+  output$distribucion_geografica <- renderPlotly({
+    df <- datos_filtrados()
+    
+    paises <- df %>%
+      count(country, sort = TRUE) %>%
+      head(8) # Top 8 países
+    
+    p <- plot_ly(paises, x = ~reorder(country, n), y = ~n, type = 'bar',
+                 marker = list(color = '#e74c3c')) %>%
+      layout(
+        xaxis = list(title = ""),
+        yaxis = list(title = "Registros"),
+        margin = list(t = 20, r = 10, b = 40, l = 40),
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = FALSE)
+    
+    p
+  })
+  
+  # 3. Índice de Shannon - Reemplaza concentración espacial
+  output$indice_shannon <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos para mostrar", textfont = list(size = 14)) %>%
+        layout(
+          title = list(text = "Resumen de Datos Filtrados", x = 0.5),
+          xaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          yaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          margin = list(t = 20, r = 10, b = 40, l = 40)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Crear resumen rápido de los datos filtrados
+    resumen_data <- data.frame(
+      Categoria = c("Géneros", "Especies", "Registros", "Países"),
+      Cantidad = c(
+        n_distinct(df$genus),
+        n_distinct(df$species),
+        nrow(df),
+        n_distinct(df$country)
+      ),
+      Color = c("#3498db", "#e74c3c", "#f39c12", "#27ae60")
+    )
+    
+    # Crear gráfico de barras simple y claro
+    p <- plot_ly(resumen_data, 
+                 x = ~Categoria, 
+                 y = ~Cantidad, 
+                 type = 'bar',
+                 marker = list(color = ~Color)) %>%
+      layout(
+        title = list(text = "Resumen de Datos Filtrados", x = 0.5, font = list(size = 14)),
+        xaxis = list(title = "", tickangle = 0),
+        yaxis = list(title = "Cantidad"),
+        margin = list(t = 40, r = 10, b = 50, l = 50),
+        showlegend = FALSE,
+        plot_bgcolor = 'rgba(0,0,0,0)',
+        paper_bgcolor = 'rgba(0,0,0,0)'
+      ) %>%
+      config(displayModeBar = FALSE)
+    
+    p
+  })
+  
+  # GRÁFICO 2: Top 10 Géneros (Optimizado para filtros)
+  output$diversidad_por_genero <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos disponibles", textfont = list(size = 14)) %>%
+        layout(
+          title = list(text = "Top Géneros por Diversidad", x = 0.5),
+          xaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          yaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Mostrar SOLO los top 10 géneros para evitar sobrecarga visual con filtros
+    generos <- df %>%
+      group_by(genus) %>%
+      summarise(
+        especies = n_distinct(species),
+        registros = n(),
+        .groups = 'drop'
+      ) %>%
+      arrange(desc(especies)) %>%
+      head(10)  # LIMITADO a 10 para mejor visualización con filtros
+    
+    if(nrow(generos) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin géneros para mostrar", textfont = list(size = 14)) %>%
+        layout(
+          title = list(text = "Top Géneros por Diversidad", x = 0.5),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Crear colores gradientes
+    colors <- colorRampPalette(c("#3498db", "#e74c3c"))(nrow(generos))
+    
+    p <- plot_ly(generos, x = ~reorder(genus, especies), y = ~especies, 
+                 type = 'bar', 
+                 marker = list(color = colors, line = list(color = 'rgba(0,0,0,0.3)', width = 1)),
+                 text = ~paste("Registros:", registros), textposition = 'none',
+                 hovertemplate = ~paste(
+                   "<b>%{x}</b><br>",
+                   "Especies: %{y}<br>",
+                   "Registros:", registros,
+                   "<extra></extra>"
+                 )) %>%
+      layout(
+        title = list(text = "Top 10 Géneros por Diversidad", x = 0.5, font = list(size = 14)),
+        xaxis = list(title = "", tickangle = 45),
+        yaxis = list(title = "Especies"),
+        margin = list(t = 60, r = 20, b = 100, l = 50),
+        showlegend = FALSE,
+        plot_bgcolor = 'rgba(0,0,0,0)',
+        paper_bgcolor = 'rgba(0,0,0,0)'
+      ) %>%
+      config(displayModeBar = FALSE)
+    
+    p
+  })
+  
+  # GRÁFICO OPTIMIZADO: Top 10 Países por Esfuerzo de Muestreo
+  output$curvas_acumulacion <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos disponibles", textfont = list(size = 16)) %>%
+        layout(
+          title = list(text = "Esfuerzo de Muestreo", x = 0.5),
+          xaxis = list(title = "País", showgrid = FALSE, showticklabels = FALSE),
+          yaxis = list(title = "Eficiencia", showgrid = FALSE, showticklabels = FALSE),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Calcular eficiencia de muestreo (especies/registros) por país
+    eficiencia_data <- df %>%
+      group_by(country) %>%
+      summarise(
+        total_registros = n(),
+        especies_unicas = n_distinct(species),
+        eficiencia = round(especies_unicas / total_registros * 100, 2),
+        .groups = 'drop'
+      ) %>%
+      filter(total_registros >= 10) %>%  # Solo países con suficientes registros
+      arrange(desc(eficiencia)) %>%
+      head(12)  # Top 12 países
+    
+    # Crear gráfico de barras con gradiente
+    colors <- colorRampPalette(c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"))(nrow(eficiencia_data))
+    
+    p <- plot_ly(eficiencia_data, 
+                 x = ~reorder(country, eficiencia), 
+                 y = ~eficiencia,
+                 type = 'bar',
+                 marker = list(
+                   color = colors,
+                   line = list(color = 'rgba(0,0,0,0.2)', width = 1)
+                 ),
+                 text = ~paste("Registros:", total_registros, "<br>Especies:", especies_unicas),
+                 textposition = 'none',
+                 hovertemplate = ~paste(
+                   "<b>País:</b>", country, "<br>",
+                   "<b>Eficiencia:</b>", eficiencia, "%<br>",
+                   "<b>Especies:</b>", especies_unicas, "<br>",
+                   "<b>Registros:</b>", total_registros,
+                   "<extra></extra>"
+                 )) %>%
+      layout(
+        title = list(text = "Eficiencia de Muestreo por País (%)", x = 0.5),
+        xaxis = list(title = "País", tickangle = 45),
+        yaxis = list(title = "Especies por cada 100 registros"),
+        margin = list(t = 60, r = 40, b = 100, l = 60),
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = TRUE, displaylogo = FALSE)
+    
+    p
+  })
+  
+  # GRÁFICO 3: Top 10 Países (Optimizado para filtros)
+  output$riqueza_por_pais <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos disponibles", textfont = list(size = 14)) %>%
+        layout(
+          title = list(text = "Top Países por Riqueza", x = 0.5),
+          xaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          yaxis = list(showgrid = FALSE, showticklabels = FALSE),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Mostrar SOLO los top 10 países para evitar sobrecarga visual con filtros
+    riqueza <- df %>%
+      group_by(country) %>%
+      summarise(
+        especies_unicas = n_distinct(species),
+        registros_totales = n(),
+        .groups = 'drop'
+      ) %>%
+      arrange(desc(especies_unicas)) %>%
+      head(10)  # LIMITADO a 10 para mejor visualización con filtros
+    
+    if(nrow(riqueza) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin países para mostrar", textfont = list(size = 14)) %>%
+        layout(
+          title = list(text = "Top Países por Riqueza", x = 0.5),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Crear colores gradientes
+    colors <- colorRampPalette(c("#27ae60", "#f39c12"))(nrow(riqueza))
+    
+    p <- plot_ly(riqueza, x = ~reorder(country, especies_unicas), y = ~especies_unicas,
+                 type = 'bar', 
+                 marker = list(color = colors, line = list(color = 'rgba(0,0,0,0.3)', width = 1)),
+                 text = ~paste("Registros:", registros_totales), 
+                 textposition = 'none',
+                 hovertemplate = ~paste(
+                   "<b>%{x}</b><br>",
+                   "Especies: %{y}<br>",
+                   "Registros:", registros_totales,
+                   "<extra></extra>"
+                 )) %>%
+      layout(
+        title = list(text = "Top 10 Países por Riqueza", x = 0.5, font = list(size = 14)),
+        xaxis = list(title = "", tickangle = 45),
+        yaxis = list(title = "Especies"),
+        margin = list(t = 60, r = 20, b = 100, l = 50),
+        showlegend = FALSE,
+        plot_bgcolor = 'rgba(0,0,0,0)',
+        paper_bgcolor = 'rgba(0,0,0,0)'
+      ) %>%
+      config(displayModeBar = FALSE)
+    
+    p
+  })
+  
+  # GRÁFICO OPTIMIZADO: Distribución de Registros por Año
+  output$endemismo_pais <- renderPlotly({
+    df <- datos_filtrados()
+    
+    if(nrow(df) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos disponibles", textfont = list(size = 16)) %>%
+        layout(
+          title = list(text = "Distribución Temporal", x = 0.5),
+          xaxis = list(title = "Año", showgrid = FALSE, showticklabels = FALSE),
+          yaxis = list(title = "Registros", showgrid = FALSE, showticklabels = FALSE),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Agregar datos por décadas para mejor visualización
+    temporal_data <- df %>%
+      filter(!is.na(year) & year >= 1950) %>%  # Solo años válidos desde 1950
+      mutate(
+        decada = paste0(floor(year/10)*10, "s")
+      ) %>%
+      group_by(decada) %>%
+      summarise(
+        registros = n(),
+        especies_distintas = n_distinct(species),
+        paises_distintos = n_distinct(country),
+        .groups = 'drop'
+      ) %>%
+      arrange(decada)
+    
+    if(nrow(temporal_data) == 0) {
+      p <- plot_ly() %>%
+        add_text(x = 0, y = 0, text = "Sin datos de fecha disponibles", textfont = list(size = 16)) %>%
+        layout(
+          title = list(text = "Distribución Temporal de Registros", x = 0.5),
+          margin = list(t = 60, r = 40, b = 60, l = 60)
+        ) %>%
+        config(displayModeBar = FALSE)
+      return(p)
+    }
+    
+    # Crear gráfico de barras con gradiente temporal
+    colors <- colorRampPalette(c("#440154", "#31688e", "#35b779", "#fde725"))(nrow(temporal_data))
+    
+    p <- plot_ly(temporal_data, 
+                 x = ~decada, 
+                 y = ~registros,
+                 type = 'bar',
+                 marker = list(
+                   color = colors,
+                   line = list(color = 'rgba(0,0,0,0.3)', width = 1)
+                 ),
+                 text = ~paste("Especies:", especies_distintas, "<br>Países:", paises_distintos),
+                 textposition = 'none',
+                 hovertemplate = ~paste(
+                   "<b>Década:</b>", decada, "<br>",
+                   "<b>Registros:</b>", registros, "<br>",
+                   "<b>Especies:</b>", especies_distintas, "<br>",
+                   "<b>Países:</b>", paises_distintos,
+                   "<extra></extra>"
+                 )) %>%
+      layout(
+        title = list(text = "Distribución Temporal de Registros por Década", x = 0.5),
+        xaxis = list(title = "Década", tickangle = 0),
+        yaxis = list(title = "Número de Registros"),
+        margin = list(t = 60, r = 40, b = 80, l = 60),
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = TRUE, displaylogo = FALSE)
+    
+    p
+  })
+  
+  output$completitud_taxonomica <- renderPlotly({
+    df <- datos_filtrados()
+    
+    completitud <- df %>%
+      mutate(
+        tiene_subespecie = !is.na(sub_species) & sub_species != "NA" & sub_species != ""
+      ) %>%
+      group_by(genus) %>%
+      summarise(
+        total_especies = n_distinct(species),
+        con_subespecie = sum(tiene_subespecie),
+        porcentaje_completo = round((con_subespecie / n()) * 100, 1),
+        .groups = 'drop'
+      ) %>%
+      filter(total_especies >= 3) %>% # Solo géneros con 3+ especies
+      arrange(desc(porcentaje_completo)) %>%
+      head(15)
+    
+    p <- plot_ly(completitud, x = ~reorder(genus, porcentaje_completo), 
+                 y = ~porcentaje_completo, type = 'bar',
+                 marker = list(color = ~porcentaje_completo, colorscale = 'RdYlGn',
+                              cmin = 0, cmax = 100)) %>%
+      layout(
+        title = list(text = "Completitud Taxonómica por Género", x = 0.5),
+        xaxis = list(title = "Género", tickangle = 45),
+        yaxis = list(title = "% Registros con Subespecie", range = c(0, 100)),
+        margin = list(t = 60, r = 40, b = 100, l = 60),
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = TRUE, displaylogo = FALSE)
+    
+    p
+  })
+  
+  output$resumen_taxonomico <- renderTable({
+    df <- datos_filtrados()
+    
+    resumen <- data.frame(
+      Métrica = c(
+        "Total géneros",
+        "Total especies", 
+        "Total registros",
+        "Con subespecie",
+        "% Completitud"
+      ),
+      Valor = c(
+        n_distinct(df$genus),
+        n_distinct(df$species),
+        nrow(df),
+        sum(!is.na(df$sub_species) & df$sub_species != "NA" & df$sub_species != ""),
+        paste0(round((sum(!is.na(df$sub_species) & df$sub_species != "NA" & 
+                          df$sub_species != "") / nrow(df)) * 100, 1), "%")
+      )
+    )
+    
+    resumen
+  }, striped = TRUE, hover = TRUE, width = "100%")
+  
   # Observador para cambiar el tipo de mapa base
   observeEvent(input$mapa_base, {
     leafletProxy("mapa_principal") %>%
       clearTiles() %>%
       addProviderTiles(providers[[input$mapa_base]])
+  })
+  
+  # BOTÓN LIMPIAR FILTROS MEJORADO (menos confuso)
+  observeEvent(input$limpiar_filtros, {
+    # Solo resetear filtros principales, NO la visualización ni rangos de años
+    updatePickerInput(session, "filtro_genero", selected = "Todos")
+    updatePickerInput(session, "filtro_especie", selected = "Todas")
+    updatePickerInput(session, "filtro_subespecie", selected = "Todas")
+    updatePickerInput(session, "filtro_subfamily", selected = "Todas")
+    updatePickerInput(session, "filtro_tribe", selected = "Todas")
+    updatePickerInput(session, "filtro_pais", selected = "Todos")
+    
+    # NO resetear: tipo de visualización, rango de años, ni filtro de fechas
+    # Esto hace que sea menos confuso para el usuario
+    
+    # Mostrar notificación más clara
+    showNotification(
+      "Filtros de categorías limpiados (fechas y visualización sin cambios)",
+      type = "message",
+      duration = 4
+    )
+  })
+  
+  # BOTÓN LIMPIAR FILTROS EN ANÁLISIS ESTADÍSTICOS (misma lógica mejorada)
+  observeEvent(input$limpiar_filtros_analisis, {
+    # Solo resetear filtros principales, NO las configuraciones
+    updatePickerInput(session, "filtro_genero", selected = "Todos")
+    updatePickerInput(session, "filtro_especie", selected = "Todas")
+    updatePickerInput(session, "filtro_subespecie", selected = "Todas")
+    updatePickerInput(session, "filtro_subfamily", selected = "Todas")
+    updatePickerInput(session, "filtro_tribe", selected = "Todas")
+    updatePickerInput(session, "filtro_pais", selected = "Todos")
+    
+    # Mostrar notificación más clara
+    showNotification(
+      "Filtros de categorías limpiados desde Análisis",
+      type = "message",
+      duration = 4
+    )
   })
 }
 

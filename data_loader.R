@@ -1,512 +1,163 @@
-# data_loader.R - Sistema unificado de carga de datos
+# ===============================================
+# DATA LOADER - SOLO DATOS DE JOANA
+# ===============================================
+
+# Load required libraries
 library(dplyr)
-library(readr)
-library(readxl)
-library(janitor)
 library(stringr)
+library(readr)
 library(tidyr)
 
-# Función auxiliar para limpiar y validar coordenadas
-clean_coordinates <- function(df) {
-  # Función auxiliar para convertir a numérico de forma segura
-  safe_numeric <- function(x) {
-    suppressWarnings(as.numeric(as.character(x)))
-  }
-  
-  # Buscar columnas de latitud
-  lat_cols <- grep("lat|latitude|decimal_latitude", names(df), ignore.case = TRUE, value = TRUE)
-  if(length(lat_cols) > 0) {
-    # Usar la primera columna encontrada
-    df$latitude <- safe_numeric(df[[lat_cols[1]]])
-  }
-  
-  # Buscar columnas de longitud
-  lon_cols <- grep("lon|longitude|decimal_longitude", names(df), ignore.case = TRUE, value = TRUE)
-  if(length(lon_cols) > 0) {
-    # Usar la primera columna encontrada
-    df$longitude <- safe_numeric(df[[lon_cols[1]]])
-  }
-  
-  # Verificar que las columnas existan
-  if(!"latitude" %in% names(df) || !"longitude" %in% names(df)) {
-    warning("No se encontraron columnas de coordenadas válidas")
-    df$latitude <- NA
-    df$longitude <- NA
-  }
-  
-  # IMPORTANTE: Ya NO filtramos registros sin coordenadas
-  # Solo marcamos coordenadas inválidas como NA
-  df <- df %>%
-    mutate(
-      latitude = ifelse(is.na(latitude) | latitude < -90 | latitude > 90, NA, latitude),
-      longitude = ifelse(is.na(longitude) | longitude < -180 | longitude > 180, NA, longitude)
-    )
-  
-  return(df)
-}
+# Set locale for date parsing
+Sys.setlocale(locale = "en_US.UTF-8")
 
-# Función para estandarizar nombres de columnas
-standardize_columns <- function(df) {
-  # Convertir todos los nombres a minúsculas
-  names(df) <- tolower(names(df))
-  
-  # Reemplazar puntos por guiones bajos
-  names(df) <- gsub("\\.", "_", names(df))
-  
-  # Renombrar columnas específicas si existen
-  if("subspecies" %in% names(df)) names(df)[names(df) == "subspecies"] <- "sub_species"
-  if("sub_sp" %in% names(df)) names(df)[names(df) == "sub_sp"] <- "sub_species"
-  if("subspecies_form" %in% names(df)) names(df)[names(df) == "subspecies_form"] <- "sub_species"
-  
-  if("specie" %in% names(df)) names(df)[names(df) == "specie"] <- "species"
-  if("sp" %in% names(df)) names(df)[names(df) == "sp"] <- "species"
-  
-  if("gen" %in% names(df)) names(df)[names(df) == "gen"] <- "genus"
-  
-  if("pais" %in% names(df)) names(df)[names(df) == "pais"] <- "country"
-  if("país" %in% names(df)) names(df)[names(df) == "país"] <- "country"
-  
-  if("collection_date" %in% names(df)) names(df)[names(df) == "collection_date"] <- "collection_date"
-  if("fecha_colecta" %in% names(df)) names(df)[names(df) == "fecha_colecta"] <- "collection_date"
-  
-  if("collector" %in% names(df)) names(df)[names(df) == "collector"] <- "collector"
-  if("colector" %in% names(df)) names(df)[names(df) == "colector"] <- "collector"
-  
-  if("altitude" %in% names(df)) names(df)[names(df) == "altitude"] <- "altitude"
-  if("elevation" %in% names(df)) names(df)[names(df) == "elevation"] <- "altitude"
-  if("altitud" %in% names(df)) names(df)[names(df) == "altitud"] <- "altitude"
-  
-  if("habitat" %in% names(df)) names(df)[names(df) == "habitat"] <- "habitat"
-  
-  if("host_plant" %in% names(df)) names(df)[names(df) == "host_plant"] <- "host_plant"
-  if("planta_hospedera" %in% names(df)) names(df)[names(df) == "planta_hospedera"] <- "host_plant"
-  
-  return(df)
-}
+# Define constants for Joana's Google Sheets
+gsheet_id <- "1QZj6YgHAJ9NmFXFPCtu-i-1NDuDmAdMF2Wogts7S2_4"
+sheets <- c("Collection_data", "Location_data", "Photo_links")
+rds_paths <- setNames(paste0(sheets, ".rds"), sheets)
 
-# Función para cargar datos desde Excel (DORE)
-load_dore_data <- function() {
-  tryCatch({
-    if (file.exists("Dore_Ithomiini_Data.xlsx")) {
-      message("Cargando datos DORE desde Excel...")
-      
-      # Obtener información de las hojas del archivo Excel
-      tryCatch({
-        if(!requireNamespace("readxl", quietly = TRUE)) {
-          warning("El paquete readxl no está disponible. No se pueden leer archivos Excel.")
-          return(NULL)
-        }
-        
-        # Listar hojas de Excel
-        sheets <- readxl::excel_sheets("Dore_Ithomiini_Data.xlsx")
-        message(paste("  - Hojas disponibles:", paste(sheets, collapse = ", ")))
-        
-        # Intentar leer la primera hoja
-        df <- readxl::read_excel("Dore_Ithomiini_Data.xlsx", sheet = 1, na = c("", "NA", "N/A"), guess_max = 50000)
-        message(paste("  - Leyendo hoja:", sheets[1]))
-        
-        # Si tiene muy pocas columnas, intentar con otras hojas
-        if(ncol(df) < 5 && length(sheets) > 1) {
-          for(i in 2:length(sheets)) {
-            temp_df <- readxl::read_excel("Dore_Ithomiini_Data.xlsx", sheet = i, na = c("", "NA", "N/A"), guess_max = 50000)
-            message(paste("  - Intentando hoja alternativa:", sheets[i], "con", ncol(temp_df), "columnas"))
-            
-            if(ncol(temp_df) > ncol(df)) {
-              df <- temp_df
-              message(paste("  - Usando hoja:", sheets[i]))
-            }
-          }
-        }
-        
-        n_original <- nrow(df)
-        
-        df <- clean_names(df)
-        df <- standardize_columns(df)
-        df <- clean_coordinates(df)
-        
-        message(paste("  - Total registros DORE:", n_original))
-        message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
-        
-        # Si el dataframe tiene pocas filas, es probable que haya un error de lectura
-        if(nrow(df) < 1000) {
-          warning(paste("Pocos registros en Excel (", nrow(df), "). Puede indicar un problema de lectura."))
-        }
-        
-        return(df)
-      }, error = function(e) {
-        warning(paste("Error leyendo Excel:", e$message))
-        
-        # Intentar con una configuración más simple como último recurso
-        message("  - Intentando método alternativo de lectura de Excel...")
-        df <- read_excel("Dore_Ithomiini_Data.xlsx", guess_max = 21000)
-        
-        if(!is.null(df) && nrow(df) > 0) {
-          n_original <- nrow(df)
-          
-          df <- clean_names(df)
-          df <- standardize_columns(df)
-          df <- clean_coordinates(df)
-          
-          message(paste("  - Total registros DORE (método alternativo):", n_original))
-          return(df)
-        } else {
-          return(NULL)
-        }
-      })
-    } else {
-      warning("Archivo DORE Excel no encontrado")
-      return(NULL)
-    }
-  }, error = function(e) {
-    warning(paste("Error cargando datos DORE:", e$message))
-    return(NULL)
-  })
-}
-
-# Función para cargar y procesar datos de Joana
-load_joana_data <- function() {
-  tryCatch({
-    if (file.exists("Dore_Ithomiini_DataJ.csv")) {
-      message("Cargando datos de Joana desde CSV local...")
-      
-      # Intentar con diferentes separadores
-      df <- NULL
-      
-      # Intentar con punto y coma
-      tryCatch({
-        # Primero intentar con readr::read_csv2 para mejor manejo de errores
-        df <- readr::read_csv2("Dore_Ithomiini_DataJ.csv", 
-                               col_types = readr::cols(), 
-                               locale = readr::locale(encoding = "UTF-8"),
-                               show_col_types = FALSE,
-                               na = c("", "NA", "N/A"))
-        
-        if(ncol(df) > 1) {
-          message("  - Archivo leído con separador ';' usando readr")
-        } else {
-          # Si falla, intentar con utils::read.csv2
-          df <- utils::read.csv2("Dore_Ithomiini_DataJ.csv", 
-                                 stringsAsFactors = FALSE, 
-                                 encoding = "UTF-8", 
-                                 na.strings = c("", "NA", "N/A"))
-          message("  - Archivo leído con separador ';' usando utils")
-        }
-      }, error = function(e) { 
-        message(paste("  - Error al leer con ';':", e$message))
-        df <- NULL 
-      })
-      
-      # Si falla, intentar con coma
-      if(is.null(df) || ncol(df) <= 1) {
-        tryCatch({
-          # Primero intentar con readr
-          df <- readr::read_csv("Dore_Ithomiini_DataJ.csv", 
-                                col_types = readr::cols(), 
-                                locale = readr::locale(encoding = "UTF-8"),
-                                show_col_types = FALSE,
-                                na = c("", "NA", "N/A"))
-          
-          if(ncol(df) > 1) {
-            message("  - Archivo leído con separador ',' usando readr")
-          } else {
-            # Si falla, intentar con utils::read.csv
-            df <- utils::read.csv("Dore_Ithomiini_DataJ.csv", 
-                                  stringsAsFactors = FALSE, 
-                                  encoding = "UTF-8", 
-                                  na.strings = c("", "NA", "N/A"))
-            message("  - Archivo leído con separador ',' usando utils")
-          }
-        }, error = function(e) { 
-          message(paste("  - Error al leer con ',':", e$message))
-          df <- NULL 
-        })
-      }
-      
-      # Si sigue fallando, intentar con readLines y procesamiento manual
-      if(is.null(df) || ncol(df) <= 1) {
-        message("  - Intentando lectura manual línea por línea")
-        tryCatch({
-          # Leer las líneas del archivo
-          lines <- readLines("Dore_Ithomiini_DataJ.csv", encoding = "UTF-8")
-          
-          # Detectar el separador examinando la primera línea
-          first_line <- lines[1]
-          sep_char <- ","
-          if(grepl(";", first_line)) sep_char <- ";"
-          if(grepl("\t", first_line)) sep_char <- "\t"
-          
-          # Dividir las líneas manualmente
-          data_list <- lapply(lines, function(line) {
-            unlist(strsplit(line, sep_char, fixed = TRUE))
-          })
-          
-          # Verificar que todas las filas tengan el mismo número de columnas
-          col_count <- length(data_list[[1]])
-          valid_rows <- sapply(data_list, function(x) length(x) == col_count)
-          
-          if(sum(valid_rows) > 1) {
-            # Crear data frame
-            header <- data_list[[1]]
-            data_matrix <- do.call(rbind, data_list[valid_rows][-1])
-            df <- as.data.frame(data_matrix, stringsAsFactors = FALSE)
-            names(df) <- header
-            
-            message(paste("  - Procesamiento manual exitoso con", sep_char, 
-                          "como separador. Filas válidas:", nrow(df)))
-          } else {
-            message("  - El procesamiento manual falló: formato inconsistente")
-          }
-        }, error = function(e) {
-          message(paste("  - Error en procesamiento manual:", e$message))
-        })
-      }
-      
-      if(!is.null(df) && ncol(df) > 1) {
-        n_original <- nrow(df)
-        
-        df <- clean_names(df)
-        df <- standardize_columns(df)
-        df <- clean_coordinates(df)
-        
-        message(paste("  - Total registros Joana:", n_original))
-        message(paste("  - Registros con coordenadas válidas:", sum(!is.na(df$latitude) & !is.na(df$longitude))))
-        return(df)
-      } else {
-        warning("No se pudo leer el archivo Dore_Ithomiini_DataJ.csv")
-        return(NULL)
-      }
-    } else {
-      warning("Archivo Dore_Ithomiini_DataJ.csv no encontrado")
-      return(NULL)
-    }
-  }, error = function(e) {
-    warning(paste("Error procesando datos de Joana:", e$message))
-    return(NULL)
-  })
-}
-
-# Función para cargar archivos CSV genéricos
-load_generic_csv <- function(file_path) {
-  tryCatch({
-    df <- NULL
-    
-    # Intentar con coma
-    tryCatch({
-      df <- read_csv(file_path, show_col_types = FALSE)
-      if (ncol(df) <= 1) df <- NULL
-    }, error = function(e) { df <- NULL })
-    
-    # Intentar con punto y coma
-    if(is.null(df)) {
-      tryCatch({
-        df <- read_csv2(file_path, show_col_types = FALSE)
-        if (ncol(df) <= 1) df <- NULL
-      }, error = function(e) { df <- NULL })
-    }
-    
-    # Intentar con tab
-    if(is.null(df)) {
-      tryCatch({
-        df <- read_tsv(file_path, show_col_types = FALSE)
-        if (ncol(df) <= 1) df <- NULL
-      }, error = function(e) { df <- NULL })
-    }
-    
-    if (!is.null(df)) {
-      df <- clean_names(df)
-      df <- standardize_columns(df)
-      df <- clean_coordinates(df)
-      return(df)
-    } else {
-      warning(paste("No se pudo leer", file_path))
-      return(NULL)
-    }
-    
-  }, error = function(e) {
-    warning(paste("Error leyendo", file_path, ":", e$message))
-    return(NULL)
-  })
-}
-
-# ============================================
-# PROCESO PRINCIPAL DE CARGA DE DATOS
-# ============================================
-
-message("=== Iniciando carga de datos de mariposas Ithomiini ===")
-
-# Lista para almacenar todos los dataframes
-all_data <- list()
-
-# 1. Cargar datos DORE
-dore_data <- load_dore_data()
-if (!is.null(dore_data) && nrow(dore_data) > 0) {
-  all_data$dore <- dore_data
-}
-
-# 2. Cargar datos de Joana
-joana_data <- load_joana_data()
-if (!is.null(joana_data) && nrow(joana_data) > 0) {
-  all_data$joana <- joana_data
-}
-
-# 3. Cargar otros archivos CSV en el directorio
-csv_files <- list.files(pattern = "\\.csv$", full.names = TRUE)
-csv_files <- csv_files[!grepl("Dore_Ithomiini_dataJ\\.csv", csv_files)]
-
-if (length(csv_files) > 0) {
-  message(paste("\nBuscando otros archivos CSV:", length(csv_files), "encontrados"))
+# Function to download and save data from Google Sheets
+download_and_save_data <- function() {
+  cat("Descargando datos de Google Sheets...\n")
   
-  for (file in csv_files) {
-    message(paste("  - Procesando:", basename(file)))
-    df <- load_generic_csv(file)
-    if (!is.null(df) && nrow(df) > 0) {
-      all_data[[basename(file)]] <- df
-    }
-  }
-}
-
-# Combinar todos los datos
-if (length(all_data) > 0) {
-  message("\nCombinando todos los conjuntos de datos...")
-  
-  # Función para asegurar que todas las columnas existan
-  ensure_columns <- function(df) {
-    required_cols <- c("genus", "species", "sub_species", "country", 
-                      "latitude", "longitude", "collection_date", 
-                      "collector", "altitude", "habitat", "host_plant")
-    
-    for (col in required_cols) {
-      if (!col %in% names(df)) {
-        df[[col]] <- NA
-      }
-    }
-    
+  # Download data from Google Sheets
+  data_list <- lapply(sheets, function(sheet_name) {
+    cat("Descargando hoja:", sheet_name, "\n")
+    url <- paste0("https://docs.google.com/spreadsheets/d/", gsheet_id, "/gviz/tq?tqx=out:csv&sheet=", URLencode(sheet_name))
+    df <- read_csv(url, col_types = cols(.default = "c"))
     return(df)
-  }
+  })
   
-  # Asegurar columnas en todos los dataframes y mostrar conteos
-  message("\nConteo de registros por fuente antes de combinar:")
-  for (name in names(all_data)) {
-    all_data[[name]] <- ensure_columns(all_data[[name]])
-    message(paste(" -", name, ":", nrow(all_data[[name]]), "registros"))
-  }
+  # Name the data frames
+  names(data_list) <- sheets
   
-  # Combinar todos los dataframes
-  datos_mariposas <- bind_rows(all_data, .id = "source_file")
-  message(paste("\nTotal de registros después de combinar:", nrow(datos_mariposas)))
+  # Save as RDS files
+  mapply(saveRDS, data_list, rds_paths)
   
-  # Limpiar y procesar los datos combinados
-  datos_mariposas <- datos_mariposas %>%
-    mutate(
-      # Limpiar texto
-      genus = trimws(genus),
-      species = trimws(species),
-      sub_species = trimws(sub_species),
-      country = trimws(country),
-      
-      # Capitalizar género correctamente
-      genus = ifelse(is.na(genus) | genus == "", "Unknown",
-                    paste0(toupper(substr(genus, 1, 1)), 
-                          tolower(substr(genus, 2, nchar(genus))))),
-      
-      # Species en minúsculas
-      species = ifelse(is.na(species) | species == "", "sp.", tolower(species)),
-      
-      # Manejar subespecies vacías
-      sub_species = ifelse(is.na(sub_species) | sub_species == "" | sub_species == "NA", 
-                          "No registrada", sub_species),
-      
-      # País
-      country = ifelse(is.na(country) | country == "", "No especificado", country),
-      
-      # Crear nombre científico
-      scientific_name = paste(genus, species),
-      
-      # ID único
-      record_id = row_number()
-    )
-  
-  # Agregar campos calculados para análisis SIG
-  datos_mariposas <- datos_mariposas %>%
-    mutate(
-      # Zona latitudinal (solo para registros con coordenadas)
-      lat_zone = case_when(
-        is.na(latitude) ~ "Sin coordenadas",
-        latitude < -23.5 ~ "Zona templada sur",
-        latitude < 0 ~ "Zona tropical sur",
-        latitude < 23.5 ~ "Zona tropical norte",
-        TRUE ~ "Zona templada norte"
-      ),
-      
-      # Categoría de elevación
-      elevation_category = case_when(
-        is.na(altitude) ~ "Sin datos",
-        altitude < 500 ~ "Tierras bajas",
-        altitude < 1000 ~ "Premontano bajo",
-        altitude < 2000 ~ "Premontano",
-        altitude < 3000 ~ "Montano bajo",
-        TRUE ~ "Montano alto"
-      ),
-      
-      # Indicador de coordenadas válidas - TODOS los registros se consideran en el mapa
-      has_coords = !is.na(latitude) & !is.na(longitude)
-    )
-  
-  # NO eliminar duplicados - mantener todos los registros
-  datos_mariposas <- datos_mariposas %>%
-    arrange(genus, species, sub_species)
-  
-  # Estadísticas finales
-  message("\n=== Resumen de datos cargados ===")
-  message(paste("Total de registros:", format(nrow(datos_mariposas), big.mark = ",")))
-  message(paste("Registros con coordenadas válidas:", format(sum(datos_mariposas$has_coords), big.mark = ",")))
-  message(paste("Registros sin coordenadas:", format(sum(!datos_mariposas$has_coords), big.mark = ",")))
-  message(paste("Porcentaje con coordenadas:", round(sum(datos_mariposas$has_coords) / nrow(datos_mariposas) * 100, 1), "%"))
-  message(paste("Géneros únicos:", n_distinct(datos_mariposas$genus)))
-  message(paste("Especies únicas:", n_distinct(datos_mariposas$scientific_name)))
-  
-  n_subspecies <- sum(datos_mariposas$sub_species != "No registrada")
-  message(paste("Registros con subespecie:", format(n_subspecies, big.mark = ",")))
-  
-  message(paste("Países:", n_distinct(datos_mariposas$country)))
-  
-  if(any(!is.na(datos_mariposas$altitude))) {
-    message(paste("Rango altitudinal:", 
-                  round(min(datos_mariposas$altitude, na.rm = TRUE)), "-", 
-                  round(max(datos_mariposas$altitude, na.rm = TRUE)), "m"))
-  }
-  
-  # Mostrar fuentes de datos
-  message("\nDistribución por fuente de datos:")
-  source_table <- table(datos_mariposas$source_file)
-  for (source_name in names(source_table)) {
-    message(paste(" -", source_name, ":", format(source_table[source_name], big.mark = ","), "registros"))
-  }
-  
-} else {
-  # Crear dataframe vacío si no hay datos
-  warning("No se pudieron cargar datos. Creando estructura vacía...")
-  
-  datos_mariposas <- data.frame(
-    record_id = integer(),
-    source_file = character(),
-    genus = character(),
-    species = character(),
-    sub_species = character(),
-    scientific_name = character(),
-    country = character(),
-    latitude = numeric(),
-    longitude = numeric(),
-    collection_date = as.Date(character()),
-    collector = character(),
-    altitude = numeric(),
-    habitat = character(),
-    host_plant = character(),
-    lat_zone = character(),
-    elevation_category = character(),
-    has_coords = logical(),
-    stringsAsFactors = FALSE
-  )
+  cat("Datos descargados y guardados exitosamente!\n")
+  return(data_list)
 }
 
-message("\n=== Carga de datos completada ===\n")
+# Function to process date columns
+process_date_columns <- function(df) {
+  date_cols <- names(df)[grepl("date", names(df), ignore.case = TRUE)]
+  df %>%
+    mutate(across(all_of(date_cols), ~ as.Date(., format = "%d-%b-%y")))
+}
+
+# Function to process data
+process_data <- function(data) {
+  # Process photo links
+  data$Photo_links <- data$Photo_links %>%
+    mutate(URL_to_view = gsub("https://drive.google.com/file/d/(.*)/view\\?usp=drivesdk",
+                              "https://drive.google.com/thumbnail?id=\\1&sz=w2000", URL),
+           CAM_ID = str_extract(Name, ".*(?=[dv]\\.JPG)"))
+  
+  # Create Dorsal and Ventral links
+  create_links <- function(side) {
+    data$Photo_links %>%
+      filter(str_detect(Name, paste0(side, "\\.JPG"))) %>%
+      select(CAM_ID, URL = URL_to_view) %>%
+      rename_with(~ paste0("URL", side), "URL")
+  }
+  
+  Dorsal_links <- create_links("d")
+  Ventral_links <- create_links("v")
+  
+  # Process coordinates
+  coord <- data$Location_data %>% 
+    select(COLLECTION_LOCATION, lat=DECIMAL_LATITUDE, long=DECIMAL_LONGITUDE)
+  
+  # Process main collection data
+  data$Collection_data <- data$Collection_data %>%
+    process_date_columns() %>%
+    mutate(CAM_ID = if_else(!is.na(CAM_ID_insectary) & CAM_ID_insectary != "NA", CAM_ID_insectary, CAM_ID)) %>%
+    left_join(Dorsal_links, by = "CAM_ID") %>%
+    left_join(Ventral_links, by = "CAM_ID") %>%
+    mutate(Preservation_date_formatted = format(as.Date(Preservation_date), "%d/%b/%Y")) %>% 
+    rename(Species = SPECIES) %>%
+    mutate(ID_status = if_else(is.na(ID_status), "NA", ID_status)) %>% 
+    left_join(coord, by = "COLLECTION_LOCATION")
+  
+  return(data)
+}
+
+# Function to convert processed data to the format expected by the app
+convert_to_app_format <- function(processed_data) {
+  cat("Convirtiendo datos al formato de la aplicación...\n")
+  
+  collection_data <- processed_data$Collection_data
+  
+  # Convert to the format expected by the Shiny app
+  species_data <- collection_data %>%
+    select(
+      Genus,
+      Species,
+      `Sub.species` = Subspecies_Form,
+      Latitude = lat,
+      Longitude = long,
+      Country = Country,
+      Subfamily = Subfamily,
+      Tribe = Tribe,
+      Collection_date
+    ) %>%
+    mutate(
+      Source = "Joana",  # All data is from Joana
+      Latitude = as.numeric(Latitude),
+      Longitude = as.numeric(Longitude),
+      # Create collection_year from Collection_date
+      collection_year = as.numeric(format(as.Date(Collection_date), "%Y"))
+    ) %>%
+    # Remove rows with missing coordinates
+    filter(!is.na(Latitude) & !is.na(Longitude)) %>%
+    # Remove duplicate rows
+    distinct(Genus, Species, `Sub.species`, Latitude, Longitude, .keep_all = TRUE)
+  
+  cat("Total de registros procesados:", nrow(species_data), "\n")
+  cat("Registros con coordenadas válidas:", sum(!is.na(species_data$Latitude) & !is.na(species_data$Longitude)), "\n")
+  cat("Rango de años:", min(species_data$collection_year, na.rm = TRUE), "-", max(species_data$collection_year, na.rm = TRUE), "\n")
+  
+  return(species_data)
+}
+
+# Main function to load complete dataset
+load_complete_dataset <- function() {
+  cat("=== CARGANDO DATOS DE JOANA ===\n")
+  
+  # Load or download raw data
+  if (!all(file.exists(unlist(rds_paths)))) {
+    cat("Archivos RDS no encontrados. Descargando desde Google Sheets...\n")
+    rawData <- download_and_save_data()
+  } else {
+    cat("Cargando datos desde archivos RDS locales...\n")
+    rawData <- lapply(rds_paths, readRDS)
+    names(rawData) <- names(rds_paths)
+  }
+  
+  # Process the data
+  cat("Procesando datos...\n")
+  processed_data <- process_data(rawData)
+  
+  # Convert to app format
+  final_data <- convert_to_app_format(processed_data)
+  
+  cat("=== CARGA COMPLETADA ===\n")
+  cat("Dataset final: ", nrow(final_data), "registros\n")
+  
+  return(final_data)
+}
+
+# Alternative function to force refresh from Google Sheets
+refresh_from_google_sheets <- function() {
+  cat("=== FORZANDO ACTUALIZACIÓN DESDE GOOGLE SHEETS ===\n")
+  
+  # Delete existing RDS files to force re-download
+  existing_files <- file.exists(unlist(rds_paths))
+  if(any(existing_files)) {
+    file.remove(unlist(rds_paths)[existing_files])
+    cat("Archivos RDS anteriores eliminados.\n")
+  }
+  
+  # Download fresh data
+  return(load_complete_dataset())
+} 

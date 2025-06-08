@@ -23,11 +23,32 @@ Una aplicación interactiva desarrollada en R Shiny para visualizar y explorar d
    install.packages(c("shiny", "leaflet", "dplyr", "plotly", "DT", "bslib", "shinyWidgets", "htmltools", "readxl", "janitor"))
    ```
 
-3. Ejecuta la aplicación:
+3. **Instalación de geospear** (requerido para análisis espaciales):
+   ```R
+   # Si no tienes devtools instalado:
+   install.packages("devtools")
+   
+   # Instalar geospear desde GitHub:
+   devtools::install_github("gearslaboratory/geospear")
+   ```
+
+4. Ejecuta la aplicación:
    ```R
    # Desde R Studio o la consola de R
    shiny::runApp("app.R")
    ```
+
+## Dependencias espaciales
+
+### geospear
+La aplicación utiliza el paquete `geospear` para análisis espaciales avanzados. Este paquete proporciona:
+- Análisis de distribución de especies
+- Cálculos de métricas espaciales
+- Integración con datos de biodiversidad
+
+**Instalación**: El paquete se instala desde GitHub usando `devtools::install_github("gearslaboratory/geospear")`
+
+**Nota**: Si experimentas problemas con la instalación de geospear, asegúrate de tener las herramientas de desarrollo instaladas en tu sistema (Rtools en Windows, XCode en macOS).
 
 ## Estructura del proyecto
 
